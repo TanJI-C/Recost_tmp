@@ -24,11 +24,19 @@ INT_MAX = 0x7fffffff
 
 NTUP_PER_BUCKET = 1
 
+parallel_tuple_cost = 0.1
+parallel_setup_cost = 1000
+
+
 
 class Cost:
     def __init__(self):
         self.startup = None
         self.per_tuple = None
+
+class Clause:
+    def __init__(self) -> None:
+        self.type = None
 
 class Node(object):
     def __init__(self, node_type, table_name=None, cost=None):
@@ -51,7 +59,8 @@ class Node(object):
         self.startup_cost = None
         self.width = None
         self.unique = False
-        
+        self.relid = None
+        self.relids = None
         # change: 
     
     def with_alias(self, alias):
@@ -74,6 +83,7 @@ class JoinNode(Node):
         self.restrictlist = []
         self.proj_cost = None
         self.semifactors = None
+        self.simple_rel_array_size = []
 
 class ScanNode(Node):
     def __init__(self, node_type):
@@ -128,6 +138,15 @@ class SortNode(Node):
     def __init__(self, node_type):
         super().__init__(node_type)
 
+class UniqueNode(Node):
+    def __init__(self, node_type):
+        super().__init__(node_type)
+        self.num_cols = None
+
+class GatherMergeNode(Node):
+    def __init__(self, node_type):
+        super().__init__(node_type)
+        self.num_workers = None
 
 DerivedPlanNode = TypeVar('DerivedPlanNode', bound=Node)
 
@@ -141,6 +160,49 @@ def clamp_row_est(rows):
     else:
         rows = round(rows)
     return rows
+
+class Bitmapset:
+    # py中整型负数使用补码,lowbit操作依然合法
+    def lowbit(x: int):
+        return x & (-x)
+
+    def __init__(self) -> None:
+        self.nwords = 0
+        self.words = []
+    
+    def bms_is_member(x: int, a: 'Bitmapset'):
+        if x < 0:
+            elog("ERROR", "nagative bitmapset member not allowed")
+        if a == None:
+            return False
+        x = int(x)
+        wordnum = x // 32
+        bitnum = x % 32
+        if wordnum >= a.nwords:
+            return False
+        if (a.words[wordnum] & (1 << bitnum)) != 0:
+            return True
+        return False
+
+    def bms_membership(a: 'Bitmapset'):
+        result = "BMS_EMPTY_SET"
+        if a == None:
+            return result
+        for item in a.words:
+            if item != 0:
+                if (result != "BMS_EMPTY_SET" or 
+                    (Bitmapset.lowbit(item) != item)):
+                    return "BMS_MULTIPLE"
+                result = "BMS_SINGLETON"
+        return result
+        
+def find_base_rel(root, relid):
+    if relid < root.simple_rel_array_size:
+        rel = root.simple_rel_array_size[relid]
+        if rel != None:
+            return rel
+    elog("ERROR", "no relation entry for relid %d", relid)
+    return None
 
 # 给定表格的元组数量和元组宽度, 返回表格的字节大小
 def relation_byte_size(ntuples, tupwidth):

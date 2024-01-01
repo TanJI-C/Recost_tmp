@@ -59,8 +59,16 @@ def ExecChooseHashTableSize(ntuples, tupwidth, useskew = False, try_combined_wor
 
 
 
-# TODO: 计算给定约束条件下的代价
+# 计算给定约束条件下的代价
 def cost_qual_eval(clauses, root: DerivedPlanNode):
+    cost_estim = Cost()
+    for qual in clauses:
+        cost_qual_eval_walker(qual, root, cost_estim)
+    return cost_estim
+# TODO: 计算给定的约束条件下的代价,并记录在参数cost中
+def cost_qual_eval_walker(clause, root, cost):
+    # 需要对不同的clause类型进行计算
+    # 这里原本的实现用到了很多指针的特性,代码复杂度较大
     pass
 
 # TODO: 计算重复扫描右表的代价，在nestloop中需要重复扫描右表
@@ -88,7 +96,8 @@ def ExecSupportsMarkRestore(root):
     
     return False
 
-# TODO
+# TODO: 判断是否所有的连接谓词都被用于内部索引谓词
 def has_indexed_join_quals(root, right_node):
+    
     pass
 

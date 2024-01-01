@@ -3,9 +3,6 @@ from util import *
 import rows_util as rw
 import cost_util as cs
 
-def hashjoin_init(root):
-    pass
-
 def hashjoin_info(root: HashJoinNode, left_node: DerivedPlanNode, right_node: DerivedPlanNode):
     # ! 基数估计部分
     root.rows = rw.calc_joinrel_size_estimate(root, left_node, right_node)
@@ -303,8 +300,55 @@ def nestloop_info(root: NestLoopNode, left_node: DerivedPlanNode, right_node: De
     root.startup_cost = startup_cost
     root.total_cost = startup_cost + run_cost
 
-def unique_info(root: DerivedPlanNode, son: DerivedPlanNode):
-    pass
+def unique_info(root: UniqueNode, son: DerivedPlanNode):
+    # ! 基数估计:
+    root.rows = rw.estimate_num_groups(root, son)
 
-def gathermerge_info(root: DerivedPlanNode, son: DerivedPlanNode):
-    pass
+    # ! 代价估计
+    # unique操作的儿子节点一定是一个sort节点
+    # 判断的方法是: 保存上一个行的信息,然后与当前行做相等判断,如果相等则不输出
+    # 如果不相等则更新上一个行为当前行,然后更新当前行为下一行
+    # startup_cost直接取儿子节点的startup_cost
+    # run_cost需要额外计算判断的代价,即当前行与上一行的相等判断,一次判断的最高代价为
+    # cpu_operator_cost * numCols
+
+    # 获得unique的列数, 源码的实现如下, 将全部的信息放在了sjinfo中
+    # numCols = list_length(sjinfo->semi_rhs_exprs)
+    numCols = root.num_cols
+    root.startup_cost = son.startup_cost
+    root.total_cost = son.total_cost
+    # 往高了估计(即判断到最后一列),一次判断的代价为: cpu_operator_cost * numCols
+    root.total_cost += son.rows * cpu_operator_cost * numCols
+
+def gathermerge_info(root: GatherMergeNode, son: DerivedPlanNode):
+    # gathermerge的儿子节点有很多个,但都是同一种类型
+    # ! 基数估计
+    root.rows = son.rows * root.num_workers
+
+    # ! 代价估计
+    # 儿子节点是并行执行的,所以只需要计算一次startup_cost和total_cost
+    startup_cost = son.startup_cost
+    run_cost = son.total_cost - son.startup_cost
+
+    N = root.num_workers + 1
+    logN = math.log2(N)
+    # 每一次比较的代价
+    comparison_cost = 2.0 * cpu_operator_cost
+    # 创建堆的花费
+    startup_cost += comparison_cost * N * logN
+    # merge的花费
+    run_cost += root.rows * comparison_cost * logN
+    # 堆管理的成本
+    run_cost += cpu_operator_cost * root.rows
+
+    # 并行的额外成本
+    # 由于gather_merge的有序性, 要求每一个worker都有tuple时才能进行merge
+    # 所以将运行的成本调高了5%
+    startup_cost += parallel_setup_cost
+    run_cost += parallel_tuple_cost * root.rows * 1.05
+
+    root.startup_cost = startup_cost
+    root.total_cost = startup_cost + run_cost
+
+    
+
