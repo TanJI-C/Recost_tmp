@@ -1,10 +1,8 @@
 from enum import Enum
-from typing import Type, TypeVar
+from typing import TypeVar
 import util
+from Recost_tmp.RecostNode.filterNode import parse_filter
 
-class Clause:
-    def __init__(self) -> None:
-        self.type = None
 
 # TODO: 初始化方法
 class RestrictInfo:
@@ -15,103 +13,6 @@ class RestrictInfo:
                                     # Var,Const,Param,Not,And,Or,OpExpr,ScalarArrayOpExpr,
                                     # RowCompareExpr,NullTest,BooleanTest,CurrentOfExpr,RelabelType,CoerceToDomain
         self.simple_rel_array = None # 当前约束语句涉及的relation, 可能为空
-
-class VarRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        self.column_name = None
-
-
-class ConstRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        # Const values
-        self.val = None
-
-class NotClauseRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        self.arg = None              #去掉Not之后的restrict
-
-class AndClauseRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        self.args = []
-
-class OrClauseRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        self.args = []
-
-class OpExprRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        self.opno = None            # 操作符类型
-        self.args = []              # 左右的参数 # 左右的参数分别存储{type(属性还是值), rel_name, col_name, val}
-        self.left_rel_array = []   # 如果有两个参数.分别记录左操作数的表
-        self.right_rel_array = []  # 和右操作数的表
-
-class DistinctExprRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        self.opno = None
-        self.args = []
-        self.left_rel_array = []
-        self.right_rel_array = []
-
-class ScalarArrayOpExprRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        pass
-
-class RowCompareExprRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        pass
-
-class NullTestRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        pass
-
-class BooleanTestRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        pass
-
-class CurrentOfExprRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        pass
-
-class RelabelTypeRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        pass
-
-class CoerceToDomainRestrict(RestrictInfo):
-    def __init__(self) -> None:
-        super().__init__()
-        pass
-
-DerivedRestrictInfo = TypeVar('DerivedRestrictInfo', bound=RestrictInfo)
-
-
-
-
-
-
-
-
-
-
-
-
-# TODO: 实现解析restrict, 返回restrict_list
-def restrictParse(restrict_str):
-    restrict_list = []
-    # parse restrictStr to restrict_list
-    return restrict_list
 
 
 class Node(object):
@@ -141,7 +42,7 @@ class Node(object):
     def getFilter(self, filter_str):
         self.filter_src = filter_str
         if self.filter_src != None:
-            self.filter = restrictParse(self.filter_src)
+            self.filter = parse_filter(self.filter_src)
 
     def getSimplreRelArray(self, json_dict):
         # simple_rel_array
@@ -206,7 +107,7 @@ class JoinNode(Node):
     def getJoinFilter(self, join_filter_src):
         self.join_filter_src = join_filter_src
         if self.join_filter_src != None:
-            self.join_filter = restrictParse(self.join_filter_src)
+            self.join_filter = parse_filter(self.join_filter_src)
 
     def extendJoinFilter(self, join_filter):
         if join_filter != None:
@@ -238,7 +139,7 @@ class HashJoinNode(JoinNode):
             self.getJoinFilter(json_dict["Join Filter"])
             self.extendRestrictList(self.join_filter)
         self.hash_cond_src = json_dict["Hash Cond"]
-        self.hash_cond = restrictParse(self.hash_cond_src)
+        self.hash_cond = parse_filter(self.hash_cond_src)
         self.extendRestrictList(self.hash_cond)
         self.extendJoinFilter(self.hash_cond)
 
@@ -280,7 +181,7 @@ class MergeJoinNode(JoinNode):
             self.getJoinFilter(json_dict["Join Filter"])
             self.extendRestrictList(self.join_filter)
         self.merge_cond_src = json_dict["Merge Cond"]
-        self.merge_cond = restrictParse(self.merge_cond_src)
+        self.merge_cond = parse_filter(self.merge_cond_src)
         self.extendRestrictList(self.merge_cond)
         self.extendJoinFilter(self.merge_cond)
 
