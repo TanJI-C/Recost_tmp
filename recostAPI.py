@@ -1,31 +1,16 @@
-from recostNode import *
-from recostMethod import *
-from utilsel import StatisticInfoOfRel
+from Recost_tmp.PlanNode.planNodeMethod import nodeFactory
+from Recost_tmp.utilsel import StatisticInfoOfRel
 # 解析json格式的plan为node
 
 
-def _nodeFactory(json_dict):
-    node_type = json_dict['Node Type']
-    if node_type == "Nested Loop":
-        curr_node = NestLoopNode(json_dict)
-        curr_node.recost_fun = lambda: nestloop_info(curr_node, curr_node.children[0], curr_node.children[1])
-    elif node_type == "Hash Join":
-        curr_node = HashJoinNode(json_dict)
-        curr_node.recost_fun = lambda: hashjoin_info(curr_node, curr_node.children[0], curr_node.children[1])
-    elif node_type == "Merge Join":
-        curr_node = MergeJoinNode(json_dict)
-        curr_node.recost_fun = lambda: mergejoin_info(curr_node, curr_node.children[0], curr_node.children[1])
-    # elif node_type == "Sort":
-    #     pass
-        
-    return curr_node
+
     
 def ParsePostgresPlanJson(json_dict):
     """Takes JSON dict, parses into a Node."""
     curr = json_dict['Plan']
 
     def _parse_pg(json_dict):
-        curr_node = _nodeFactory(json_dict)
+        curr_node = nodeFactory(json_dict)
 
         # if op == 'Aggregate':
         #     op = json_dict['Partial Mode'] + op
@@ -51,7 +36,7 @@ def ParsePostgresPlanJson(json_dict):
             for subplan_json in json_dict['Plans']:
                 curr_node.children.append(_parse_pg(subplan_json))
         
-        curr_node.initAfterSonInit(json_dict)
+        curr_node.initAfterSonInit()
         # if op == 'Bitmap Heap Scan':
         #     for c in curr_node.children:
         #         if c.node_type == 'Bitmap Index Scan':
@@ -67,7 +52,7 @@ def ParsePostgresPlanJson(json_dict):
 def StorePlanTreeNode(root):
     pass
 
-def Recost(root: DerivedPlanNode):
+def Recost(root):
     
     cost_list = [0]
     row_list = [0]

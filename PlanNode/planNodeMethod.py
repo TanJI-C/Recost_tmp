@@ -1,26 +1,23 @@
 from enum import Enum
 from typing import TypeVar
-import util
-from Recost_tmp.RecostNode.filterNode import parse_filter
+import Recost_tmp.estimateCost as ecost
+import Recost_tmp.estimateRow as erow
+import Recost_tmp.util as util
+from Recost_tmp.PlanNode.planNodeAPI import *
+from Recost_tmp.PlanNode.filterNode import parse_filter
+from Recost_tmp.recostMethod import *
 
 
-# TODO: 初始化方法
-class RestrictInfo:
-    def __init__(self) -> None:
-        # 约束条件可以分为连接条件和过滤条件, 这里不需要区分, 已经通过json_dict的join filter和filter区分了
-        # 在mergejoin和hashjoin中,还会再将连接条件区分为是否mergeable和hashable, 同样不需要区分，已经通过merge cond, hash cond和join filter进行区分
-        self.type = None   # 约束条件的类型包括: 
-                                    # Var,Const,Param,Not,And,Or,OpExpr,ScalarArrayOpExpr,
-                                    # RowCompareExpr,NullTest,BooleanTest,CurrentOfExpr,RelabelType,CoerceToDomain
-        self.simple_rel_array = None # 当前约束语句涉及的relation, 可能为空
-
-
-class Node(object):
+class Node(PlanNodeInterface):
     def __init__(self, json_dict):
+        super().__init__()
         # get from explain
-        self.node_type = json_dict["Node Type"]
+        for nt in NodeType:
+            if nt.value == json_dict['Node Type']:
+                self.node_type = nt
+                break
         self.startup_cost = json_dict["Startup Cost"]
-        self.total_cost = json_dict["Total cost"]
+        self.total_cost = json_dict["Total Cost"]
         self.rows = json_dict["Plan Rows"]
         self.width = json_dict["Plan Width"]
         self.actual_startup_time = json_dict["Actual Startup Time"]
@@ -42,9 +39,9 @@ class Node(object):
     def getFilter(self, filter_str):
         self.filter_src = filter_str
         if self.filter_src != None:
-            self.filter = parse_filter(self.filter_src)
+            self.filter = [parse_filter(self.filter_src)]
 
-    def getSimplreRelArray(self, json_dict):
+    def getSimpleRelArray(self, json_dict):
         # simple_rel_array
         for child in self.children:
             self.simple_rel_array.extend(child.simple_rel_array)
@@ -57,7 +54,7 @@ class Node(object):
             self.restrict_list.extend(restrict_list)
 
     def calQualCost(self):
-        self.qp_qual_cost = util.cost_qual_eval(self.restrict_list, self)
+        self.qp_qual_cost = ecost.cost_qual_eval(self.restrict_list, self)
 
     def with_alias(self, alias):
         self.table_alias = alias
@@ -72,11 +69,15 @@ class Node(object):
         assert self.table_name is not None
         return self.table_name
 
-class JoinNode(Node):
+class JoinNode(Node, JoinNodeInterface):
     def __init__(self, json_dict):
-        super().__init__(json_dict)
+        JoinNodeInterface.__init__(self)
+        Node.__init__(self, json_dict)
         # get from explain
-        self.join_type = json_dict["Join Type"]
+        for jt in JoinType:
+            if jt.value == json_dict["Join Type"]:
+                self.join_type = jt
+                break
         self.inner_unique = json_dict["Inner Unique"]
         self.rows_removed_by_filter = json_dict.get("Rows Removed by Filter", None)
 
@@ -93,40 +94,43 @@ class JoinNode(Node):
 
     def calSemifactors(self):
         # semifactors
-        if self.join_type == "ANTI" or self.join_type == "SEMI" or self.inner_unique == True:
+        if self.join_type == JoinType.ANTI or self.join_type == JoinType.SEMI or self.inner_unique == True:
             joinquals = []
             if util.IS_OUTER_JOIN(self.join_type):
                 joinquals.extend(self.join_filter)
             else:
                 joinquals.extend(self.restrict_list)
             # TODO: 这里如何传入simple_rel_array参数比较合适?
-            self.semifactors_outer_match_frac = util.clauselist_selectivity(self, joinquals, jointype="ANTI" if self.join_type == "ANTI" else "SEMI")
+            self.semifactors_outer_match_frac = erow.clauselist_selectivity(self, joinquals, join_type=JoinType.ANTI if self.join_type == JoinType.ANTI else JoinType.SEMI)
             self.semifactors_match_count = max(1.0, 
-                util.clauselist_selectivity(self, joinquals, jointype="INNER") / self.semifactors_outer_match_frac * self.children[1].rows)
+                erow.clauselist_selectivity(self, joinquals, join_type=JoinType.INNER) / self.semifactors_outer_match_frac * self.children[1].rows)
 
     def getJoinFilter(self, join_filter_src):
         self.join_filter_src = join_filter_src
         if self.join_filter_src != None:
-            self.join_filter = parse_filter(self.join_filter_src)
+            self.join_filter = [parse_filter(self.join_filter_src)]
 
     def extendJoinFilter(self, join_filter):
         if join_filter != None:
             self.join_filter.extend(join_filter)
 
     def getSelec(self):
-        self.fkselec, self.jselec, self.pselec = util.get_join_selectivity(self, self.children[0], self.children[1])
+        self.fkselec, self.jselec, self.pselec = erow.get_join_selectivity(self, self.children[0], self.children[1])
 
     def getApproxSelec(self, restrict_list):
-        self.approx_selec = util.clause_selectivity(self, restrict_list)
+        self.approx_selec = 1.0
+        for rt in restrict_list:
+            self.approx_selec *= erow.clause_selectivity(self, rt)
 
     def getProjCost(self):
         # TODO: proj_cost:
         self.proj_cost = []
 
 
-class ScanNode(Node):
-    def __init__(self, node_type):
-        super().__init__(node_type)
+class ScanNode(Node, ScanNodeInterface):
+    def __init__(self, json_dict):
+        ScanNodeInterface.__init__(self)
+        Node.__init__(self, json_dict)
 
 class HashJoinNode(JoinNode):
     def __init__(self, json_dict):
@@ -139,19 +143,16 @@ class HashJoinNode(JoinNode):
             self.getJoinFilter(json_dict["Join Filter"])
             self.extendRestrictList(self.join_filter)
         self.hash_cond_src = json_dict["Hash Cond"]
-        self.hash_cond = parse_filter(self.hash_cond_src)
+        self.hash_cond = [parse_filter(self.hash_cond_src)]
         self.extendRestrictList(self.hash_cond)
         self.extendJoinFilter(self.hash_cond)
 
         # qual cost
         self.calQualCost()
-        self.hash_qual_cost = util.cost_qual_eval(self.hash_cond, self)
+        self.hash_qual_cost = ecost.cost_qual_eval(self.hash_cond, self)
         self.qp_qual_cost.startup -= self.hash_qual_cost.startup
         self.qp_qual_cost.per_tuple -= self.hash_qual_cost.per_tuple
 
-        # selectivity
-        self.getSelec()
-        self.getApproxSelec(self.hash_cond)
 
 
         # projcost
@@ -160,15 +161,18 @@ class HashJoinNode(JoinNode):
         # get from recost_fun
         self.numbatches = None
 
-        # get from static
-        self.innerbucketsize, self.innermcvfreq = util.estimate_hash_bucket_stats()
 
     # 数据发生偏移的时候调用
     def updateWhenDataChange(self):
         self.innerbucketsize, self.innermcvfreq = util.estimate_hash_bucket_stats()
 
     def initAfterSonInit(self):
+        # selectivity
+        self.getSelec()
+        self.getApproxSelec(self.hash_cond)
         self.calSemifactors()
+        # get from static
+        self.innerbucketsize, self.innermcvfreq = util.estimate_hash_bucket_stats()
 
 class MergeJoinNode(JoinNode):
     def __init__(self, json_dict):
@@ -181,37 +185,37 @@ class MergeJoinNode(JoinNode):
             self.getJoinFilter(json_dict["Join Filter"])
             self.extendRestrictList(self.join_filter)
         self.merge_cond_src = json_dict["Merge Cond"]
-        self.merge_cond = parse_filter(self.merge_cond_src)
+        self.merge_cond = [parse_filter(self.merge_cond_src)]
         self.extendRestrictList(self.merge_cond)
         self.extendJoinFilter(self.merge_cond)
 
         # qual_cost
         self.calQualCost()
-        self.merge_qual_cost = util.cost_qual_eval(self.merge_cond, self)
+        self.merge_qual_cost = ecost.cost_qual_eval(self.merge_cond, self)
         self.qp_qual_cost.startup -= self.merge_qual_cost.startup
         self.qp_qual_cost.per_tuple -= self.merge_qual_cost.per_tuple
 
-        # selectivity
-        self.getSelec()
-        self.getApproxSelec(self.merge_cond)
         
         # projcost
         self.getProjCost()
 
         # skip_mark_restore表示是否跳过重复匹配
         self.skip_mark_restore = False
-        if ((self.jointype == "JOIN_SEMI" or
-            self.jointype == "JOIN_ANTI" or
+        if ((self.join_type == JoinType.SEMI or
+            self.join_type == JoinType.ANTI or
             self.inner_unique == True) and 
             (len(self.restrict_list) == len(self.merge_cond))):   # 所有的约束条件都是可以归并的(即join filter应该为空), 并且满足一个outer tuple只会和一个inner tuple匹配
             self.skip_mark_restore = True
 
         # startsel, endsel
-        self.outerstartsel, self.outerendsel, self.innerstartsel, self.innerendsel = util.mergejoinscansel(self)
+        self.outerstartsel, self.outerendsel, self.innerstartsel, self.innerendsel = erow.mergejoinscansel(self)
 
-    def initAfterSonInit(self, json_dict):
-        self.getSimplreRelArray()
+    def initAfterSonInit(self):
+        self.getSimpleRelArray()
         self.calSemifactors()
+        # selectivity
+        self.getSelec()
+        self.getApproxSelec(self.merge_cond)
 
 
 class NestLoopNode(JoinNode):
@@ -227,8 +231,6 @@ class NestLoopNode(JoinNode):
         # qual_cost
         self.calQualCost()
 
-        # selectivity
-        self.getSelec()
         
         # projcost
         self.getProjCost()
@@ -236,79 +238,77 @@ class NestLoopNode(JoinNode):
         # get after processing
         self.join_qual_cost = None
     
-    def initAfterSonInit(self, json_dict):
-        self.getSimplreRelArray()
+    def initAfterSonInit(self):
+        self.getSimpleRelArray()
         self.calSemifactors()
+        # selectivity
+        self.getSelec()
+
+class SeqScanNode(ScanNode):
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
+    def initAfterSonInit(self):
+        pass
 
 class IndexScanNode(ScanNode):
-    def __init__(self, node_type):
-        super().__init__(node_type)
-
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
+    def initAfterSonInit(self):
+        pass
 class IndexOnlyScanNode(ScanNode):
-    def __init__(self, node_type):
-        super().__init__(node_type)
-
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
+    def initAfterSonInit(self):
+        pass
 class MaterialNode(Node):
-    def __init__(self, node_type):
-        super().__init__(node_type)
-
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
+    def initAfterSonInit(self):
+        pass
 class SortNode(Node):
-    def __init__(self, node_type):
-        super().__init__(node_type)
-
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
+    def initAfterSonInit(self):
+        pass
 class UniqueNode(Node):
-    def __init__(self, node_type):
-        super().__init__(node_type)
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
         self.num_cols = None
-
+    def initAfterSonInit(self):
+        pass
 class GatherMergeNode(Node):
-    def __init__(self, node_type):
-        super().__init__(node_type)
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
         self.num_workers = None
+    def initAfterSonInit(self):
+        pass
+class HashNode(Node):
+    def __init__(self, json_dict):
+        super().__init__(json_dict)
+        self.num_workers = None
+    def initAfterSonInit(self):
+        pass
 
-DerivedPlanNode = TypeVar('DerivedPlanNode', bound=Node)
-DerivedJoinNode = TypeVar('DerivedJoinNode', bound=JoinNode)
 
-
-
-
-# 统计信息: 参考PG_STATIC的实现
-class StatisticInfo:
-    def __init__(self) -> None:
-        self.relation_name = None
-        self.pages = None
-        self.tuples = None
-        self.column_sta = {}
-        self.multi_column_sta = {}
-
-class StatisticKind(Enum):
-    STATISTIC_KIND_MCV = 1
-    STATISTIC_KIND_HISTOGRAM = 2
-    STATISTIC_KIND_CORRELATION = 3
-    STATISTIC_KIND_MCELEM = 4
-    STATISTIC_KIND_DECHIST = 5
-    STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM = 6
-    STATISTIC_KIND_BOUNDS_HISTOGRAM = 7
-
-class ColumnStatisticInfo:
-    UNIQUE_DISTINCT = -1.0
-    def __init__(self) -> None:
-        # 后面初始化得到的
-        self.minval = None
-        self.maxval = None
-        # 统计表里带的
-        self.datatype = None        # 数据类型
-        self.nullfrac = None
-        self.width = None
-        self.distinct = None
-        self.stakind = []
-        self.staop = []
-        self.stanumbers = []
-        self.stavalues = []
-
-class MultiColumnStatisticInfo:
-    def __init__(self) -> None:
-        self.keys = None            # List[str] 统计哪些列, 后面全部对应的使用数字,
-        self.kind = None            # List[char] d表示distinct,f表示dependencies
-        self.ndistinct = None       # map(str, int)  表示多列不同的个数
-        self.dependencies = None    # map(str, float)   表示多列的依赖度
+def nodeFactory(json_dict):
+    for nt in NodeType:
+        if nt.value == json_dict['Node Type']:
+            node_type = nt
+            break
+    if node_type == NodeType.NESTED_LOOP:
+        curr_node = NestLoopNode(json_dict)
+        curr_node.recost_fun = nestloop_info
+    elif node_type == NodeType.HASH_JOIN:
+        curr_node = HashJoinNode(json_dict)
+        curr_node.recost_fun = hashjoin_info
+    elif node_type == NodeType.MERGE_JOIN:
+        curr_node = MergeJoinNode(json_dict)
+        curr_node.recost_fun = mergejoin_info
+    elif node_type == NodeType.SEQ_SCAN:
+        curr_node = SeqScanNode(json_dict)
+        curr_node.recost_fun = seqscan_info
+    elif node_type == NodeType.HASH:
+        curr_node = HashNode(json_dict)
+        curr_node.recost_fun = hash_info
+        
+    return curr_node

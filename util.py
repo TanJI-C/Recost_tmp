@@ -1,16 +1,14 @@
 import logging
-from recostNode import * 
 from typing import List
-from enum import Enum
+from Recost_tmp.PlanNode.planNodeAPI import JoinType, NodeType
 import math
 import re
 
-class DefaultVal(Enum):
+class DefaultVal:
     INT_MAX = 0x7fffffff
-    
     DEFAULT_NUM_DISTINCT = 200
 
-class DefaultOSCost(Enum):
+class DefaultOSCost:
     # base const
     CPU_OPERATOR_COST = 0.0025
     CPU_TUPLE_COST = 0.01
@@ -18,9 +16,10 @@ class DefaultOSCost(Enum):
 
     PARALLEL_TUPLE_COST = 0.1
     PARALLEL_SETUP_COST = 1000
-    DISABLE_COST = DefaultVal.INT_MAX.value
+    DISABLE_COST = DefaultVal.INT_MAX
 
-class DefaultOSSize(Enum):
+
+class DefaultOSSize:
     HJTUPLE_OVERHEAD = 16 # typealign(8, sizeof (HashJoinTupleData))
     
     SIZE_OF_MINIMAL_TUPLE_HEADER = 32 
@@ -38,8 +37,6 @@ class DefaultOSSize(Enum):
     HASH_JOIN_TUPLE_SIZE = 8
 
     MAX_ALLOC_SIZE = 0x3fffffff
-
-
 
 
 # base method
@@ -79,13 +76,13 @@ def find_base_rel(root, relid):
             return rel
     elog("ERROR", "no relation entry for relid %d", relid)
     return None
-# TODO:
-def get_tuples_num(rel_name):
-    pass
 
+# TODO: 根据统计信息获取指定表格的tuples数
+def get_tuples_num_of_rel(rel_name):
+    return 10
 
-def IS_OUTER_JOIN(jointype):
-    if jointype == "LEFT" or jointype == "RIGHT" or jointype == "FULL" or jointype == "ANTI":
+def IS_OUTER_JOIN(join_type: JoinType):
+    if join_type == JoinType.LEFT or join_type == JoinType.RIGHT or join_type == JoinType.FULL or join_type == JoinType.ANTI:
         return True
     return False
 
@@ -96,9 +93,9 @@ def has_indexed_join_quals(root, right_node):
     # !!原本的判断需要考虑参数化约束语句,判断起来比较复杂
     # !!考虑通过判断right_node的节点是不是index来进行判断
     node_type = right_node.node_type
-    if node_type == "Index Scan" or \
-        node_type == "Index Only Scan" or \
-        node_type == "Bitmap Heap Scan":
+    if node_type == NodeType.INDEX_SCAN or \
+        node_type == NodeType.INDEX_ONLY_SCAN or \
+        node_type == NodeType.BITMAP_HEAP_SCAN:
         return True
     return False
 
@@ -108,10 +105,10 @@ def estimate_hash_bucket_stats(root, vardata):
 
 
 def ExecChooseHashTableSize(ntuples, tupwidth, useskew = False, try_combined_work_mem = False, parallel_workers = 0):
-    tupsize = DefaultOSSize.HJTUPLE_OVERHEAD.value + typealign(8, DefaultOSSize.SIZE_OF_MINIMAL_TUPLE_HEADER.value) + typealign(8, tupwidth)
+    tupsize = DefaultOSSize.HJTUPLE_OVERHEAD + typealign(8, DefaultOSSize.SIZE_OF_MINIMAL_TUPLE_HEADER) + typealign(8, tupwidth)
     inner_rel_bytes = ntuples * tupsize
 
-    hash_table_bytes = DefaultOSSize.WORK_MEM.value * 1024
+    hash_table_bytes = DefaultOSSize.WORK_MEM * 1024
 
     if try_combined_work_mem == True: #??? 多个哈希全部在同一个内存中处理
         hash_table_bytes = hash_table_bytes * parallel_workers
@@ -119,39 +116,39 @@ def ExecChooseHashTableSize(ntuples, tupwidth, useskew = False, try_combined_wor
     space_allowed = hash_table_bytes
     # hash table需要给skew batch始终预留一部分空间
     if useskew == True:
-        skew_table_bytes = hash_table_bytes * DefaultOSSize.SKEW_WORK_MEM_PRECENT.value // 100
+        skew_table_bytes = hash_table_bytes * DefaultOSSize.SKEW_WORK_MEM_PRECENT // 100
         num_skew_mcvs = skew_table_bytes // (tupsize +\
                                              ((8 * 8)) + \
-                                             4 + DefaultOSSize.SKEW_BUCKET_OVERHEAD.value)
+                                             4 + DefaultOSSize.SKEW_BUCKET_OVERHEAD)
         if num_skew_mcvs > 0:
             hash_table_bytes -= skew_table_bytes
     else:
         num_skew_mcvs = 0
 
     # 算bucket
-    max_pointers = min(space_allowed // DefaultOSSize.HASH_JOIN_TUPLE_SIZE.value, DefaultOSSize.MAX_ALLOC_SIZE.value // DefaultOSSize.HASH_JOIN_TUPLE_SIZE.value)
+    max_pointers = min(space_allowed // DefaultOSSize.HASH_JOIN_TUPLE_SIZE, DefaultOSSize.MAX_ALLOC_SIZE // DefaultOSSize.HASH_JOIN_TUPLE_SIZE)
     mppow2 = 1 << math.ceil(math.log2(max_pointers))
     if max_pointers != mppow2:
         max_pointers = mppow2 // 2
-    max_pointers = min(max_pointers, DefaultVal.INT_MAX.value // 2)
+    max_pointers = min(max_pointers, DefaultVal.INT_MAX // 2)
 
-    dbuckets = min(math.ceil(ntuples / DefaultOSSize.NTUP_PER_BUCKET.value), max_pointers)
+    dbuckets = min(math.ceil(ntuples / DefaultOSSize.NTUP_PER_BUCKET), max_pointers)
     nbuckets = max(dbuckets, 1024)
     nbuckets = 1 << math.ceil(math.log2(nbuckets))
 
     nbatch = 1
-    bucket_bytes = DefaultOSSize.HASH_JOIN_TUPLE_SIZE.value * nbuckets
+    bucket_bytes = DefaultOSSize.HASH_JOIN_TUPLE_SIZE * nbuckets
     # 一批处理不了,考虑分批次,并重新计算bucket和batch
     if inner_rel_bytes + bucket_bytes > hash_table_bytes:
         if try_combined_work_mem == True:       # ??? 并行处理不能分批次吗
             return ExecChooseHashTableSize(ntuples, tupwidth, useskew,
                                     False, parallel_workers)
-        bucket_size = tupsize * DefaultOSSize.NTUP_PER_BUCKET.value + DefaultOSSize.HASH_JOIN_TUPLE_SIZE.value
+        bucket_size = tupsize * DefaultOSSize.NTUP_PER_BUCKET + DefaultOSSize.HASH_JOIN_TUPLE_SIZE
         lbuckets = 1 << math.ceil(math.log2(hash_table_bytes // bucket_size))
         lbuckets = min(lbuckets, max_pointers)
         nbuckets = int(lbuckets)
         nbuckets = 1 << math.ceil(math.log2(nbuckets))
-        bucket_bytes = nbuckets * DefaultOSSize.HASH_JOIN_TUPLE_SIZE.value
+        bucket_bytes = nbuckets * DefaultOSSize.HASH_JOIN_TUPLE_SIZE
 
         dbatch = math.ceil(inner_rel_bytes / (hash_table_bytes - bucket_bytes))
         dbatch = min(dbatch, max_pointers)
@@ -168,10 +165,10 @@ def ExecChooseHashTableSize(ntuples, tupwidth, useskew = False, try_combined_wor
 
 # 给定表格的元组数量和元组宽度, 返回表格的字节大小
 def relation_byte_size(ntuples, tupwidth):
-    return ntuples * (typealign(8, tupwidth) + typealign(8, DefaultOSSize.SIZE_OF_HEAP_TUPLE_HEADER.value))
+    return ntuples * (typealign(8, tupwidth) + typealign(8, DefaultOSSize.SIZE_OF_HEAP_TUPLE_HEADER))
 # 给定tuples数量和tuple宽度, 返回页数
 def page_size(ntuples, tupwidth):
-    return math.ceil(relation_byte_size(ntuples, tupwidth)) / DefaultOSSize.BLCKSZ.value
+    return math.ceil(relation_byte_size(ntuples, tupwidth)) / DefaultOSSize.BLCKSZ
 
 
 def estimate_num_groups(root, son):
@@ -246,7 +243,7 @@ def convert_to_scalar(constval, loval, hival, col_sta):
     pass
 
 # 查找给定列的最小值和最大值, 并返回是否找到了
-def get_actual_variable_range(col_sta: ColumnStatisticInfo):
+def get_actual_variable_range(col_sta):
     if col_sta.min == None or col_sta.max == None:
         return False, -1, -1
     return True, col_sta.minval, col_sta.maxval

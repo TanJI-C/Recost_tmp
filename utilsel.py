@@ -1,7 +1,8 @@
 # Operator
 from enum import Enum
-from recostNode import *
-from util import * 
+from Recost_tmp.PlanNode.planNodeAPI import *
+from Recost_tmp.PlanNode.filterNode import PredicateNode, Operator, Restrict
+from Recost_tmp.util import * 
 import math
 
 # !! 未实现的操作符选择性(测试集中未包含操作符)
@@ -16,15 +17,11 @@ import math
 StatisticInfoOfRel = {}
 
 
-class DefaultSel(Enum):
+class DefaultSel:
     DEFAULT_EQ_SEL = 0.005                  # A = b
     DEFAULT_INEQ_SEL = 0.3333333333333333   # A < b
     DEFAULT_RANGE_INEQ_SEL = 0.005          # A > b and A < c
     DEFAULT_MATCH_SEL = 0.005               # A like b
-
-class Operator(Enum):
-    IllegalOperator = -1
-    BooleanNotEqualOperator = 1
 
 
 
@@ -35,14 +32,26 @@ def get_tuples_num(rel):
 def find_single_rel_for_clauses(root, rinfos):
     pass
 # TODO:
-def dependencies_clauselist_selectivity(root, rinfo, simple_rel_array, jointype, rel, esitmatedclauses):
+def dependencies_clauselist_selectivity(root, rinfo, simple_rel_array, join_type, rel, esitmatedclauses):
     pass
 
 
-def get_statistic_of_rel(relation_name):
-    return StatisticInfoOfRel.get(relation_name, None)
+def get_statistic_of_rel(relation: PredicateNode):
+    # 检查是不是
+    if len(relation.children) == 0 and relation.is_table_exist == True:
+        # TODO: 约定text第一个维度为表格全称, 第二个维度为属性全称
+        return StatisticInfoOfRel.get(relation.text[0], StatisticInfo())
+    # 返回一个空的统计信息
+    return StatisticInfo()
 
-def get_statistic_kind_of(col_sta: ColumnStatisticInfo, kind):
+def get_statistic_of_col(rel_sta: StatisticInfo, column: PredicateNode):
+    if len(column.children) == 0 and column.is_table_exist == True:
+        # TODO: 约定text第一个维度为表格全称, 第二个维度为属性全称
+        return rel_sta.column_sta.get(column.text[1], None)
+    # 返回None
+    return None
+
+def get_statistic_kind_of(col_sta: 'ColumnStatisticInfo', kind):
     staidx = -1
     for idx, val in enumerate(col_sta.stakind):
         if val == kind:
@@ -55,11 +64,11 @@ def get_statistic_kind_of(col_sta: ColumnStatisticInfo, kind):
 # 根据列的统计信息返回预估的不同tuple的数量
 # !! 参照源码的简单实现
 # 返回值为ndistinct, isdefault
-def get_variable_num_distinct(rel_sta: StatisticInfo,col_sta: ColumnStatisticInfo):
+def get_variable_num_distinct(rel_sta: 'StatisticInfo',col_sta: 'ColumnStatisticInfo'):
     stadistinct = -1.0
     if rel_sta == None or col_sta == None:
         # !! 这里按照自己的理解设计的,没有列统计信息的话直接返回默认值
-        return math.min(DefaultVal.DEFAULT_NUM_DISTINCT.value, clamp_row_est(rel_sta.tuples)), True
+        return math.min(DefaultVal.DEFAULT_NUM_DISTINCT, clamp_row_est(rel_sta.tuples)), True
 
     stadistinct = col_sta.distinct
     stanullfrac = col_sta.nullfrac
@@ -71,7 +80,7 @@ def get_variable_num_distinct(rel_sta: StatisticInfo,col_sta: ColumnStatisticInf
     # 负值为比例
     return clamp_row_est(rel_sta.tuples * -stadistinct), False
 
-def judge_unique(col_sta: ColumnStatisticInfo):
+def judge_unique(col_sta: 'ColumnStatisticInfo'):
     dist = col_sta.distinct - col_sta.nullfrac - ColumnStatisticInfo.UNIQUE_DISTINCT
     # 误差范围内则认为是unique
     if dist < 0.01 and dist > -0.01:
@@ -90,7 +99,7 @@ def var_eq_const(rel_sta: StatisticInfo, column_name ,constval, constisnull, neg
     col_sta = rel_sta.column_sta.get(column_name, None)
     if col_sta == None:
         nullfrac = 0.0
-        selec = DefaultSel.DEFAULT_EQ_SEL.value
+        selec = DefaultSel.DEFAULT_EQ_SEL
     else:
         nullfrac = col_sta.nullfrac
 
@@ -142,7 +151,7 @@ def var_eq_non_const(rel_sta: StatisticInfo, column_name, negate):
     col_sta = rel_sta.column_sta.get(column_name, None)
     if col_sta == None:
         nullfrac = 0.0
-        selec = DefaultSel.DEFAULT_EQ_SEL.value
+        selec = DefaultSel.DEFAULT_EQ_SEL
     else:
         nullfrac = col_sta.nullfrac
     
@@ -171,8 +180,8 @@ def var_eq_non_const(rel_sta: StatisticInfo, column_name, negate):
     
 
 # 判断bool变量的选择性
-def boolvarsel(root, rinfo: DerivedRestrictInfo, simple_rel_array):
-    rel_sta = get_statistic_of_rel(simple_rel_array[0])
+def boolvarsel(root, rinfo: PredicateNode, simple_rel_array):
+    rel_sta = get_statistic_of_rel(rinfo)
     if rel_sta != None:
         # !! 如果const_val统一为str类型,那么应该输入"True”
         selec = var_eq_const(rel_sta, rinfo.column_name, True, False, False)
@@ -184,52 +193,52 @@ def boolvarsel(root, rinfo: DerivedRestrictInfo, simple_rel_array):
 
 
 # TODO: ScalarArrayOpExpr   ANY ALL
-def scalararraysel(root, rinfo, is_join_clause, simple_rel_array, jointype):
+def scalararraysel(root, rinfo, is_join_clause, simple_rel_array, join_type):
     pass
 
 # TODO: RowCompareExpr
-def rowcomparesel(root, rinfo, simple_rel_array, jointype):
+def rowcomparesel(root, rinfo, simple_rel_array, join_type):
     pass
 
 # TODO: nulltestsel
-def nulltestsel(root, rinfo, simple_rel_array, jointype):
+def nulltestsel(root, rinfo, simple_rel_array, join_type):
     pass
 
 # TODO: booltestsel
-def booltestsel(root, rinfo, simple_rel_array, jointype):
+def booltestsel(root, rinfo, simple_rel_array, join_type):
     pass
 
 
 # op: = of restrict
 # eq的选择性: 包含var = const 和 var = other两种情况
-def eqsel(root, operator, rinfo: OpExprRestrict, negate): # negate表示取的结果是!operator的
+def eqsel(root, operator, rinfo: PredicateNode, negate): # negate表示取的结果是!operator的
     if negate == True: # 通过neqsel调用的
         # 转为operator
         # !!实际上用不到operator,但是目前来说调用的只有 == 和 !=, 所以还没问题
         operator = get_negator(operator)
         if operator == Operator.IllegalOperator:
-            return 1.0 - DefaultSel.DEFAULT_EQ_SEL.value
+            return 1.0 - DefaultSel.DEFAULT_EQ_SEL
 
-    if rinfo.args[0].type != "Const" and rinfo.args[1].type != "Const": 
+    if rinfo.children[0].type != Restrict.Const and rinfo.children[1].type != Restrict.Const: 
         # 两边没有一个是const
-        if rinfo.args[0].type == "Var":
-            rel_sta = get_statistic_of_rel(rinfo.args[0].rel_name)
+        if rinfo.children[0].type == Restrict.Var:
+            rel_sta = get_statistic_of_rel(rinfo.children[0])
             col_name = rinfo.args[0].col_name
         else:
-            rel_sta = get_statistic_of_rel(rinfo.args[1].rel_name)
+            rel_sta = get_statistic_of_rel(rinfo.children[1])
             col_name = rinfo.args[1].col_name
         if rel_sta == None:
             return (1.0 - DefaultSel.DEFAULT_EQ_SEL.val) if negate == True else DefaultSel.DEFAULT_EQ_SEL.val
         return var_eq_non_const(rel_sta, col_name, negate)
     
 
-    if rinfo.args[0].type == "Var":
-        rel_sta = get_statistic_of_rel(rinfo.args[0].rel_name)
+    if rinfo.children[0].type == Restrict.Var:
+        rel_sta = get_statistic_of_rel(rinfo.children[0])
         col_name = rinfo.args[0].col_name
         const_val = rinfo.args[1].val
         const_is_null = rinfo.args[1].is_null
     else:
-        rel_sta = get_statistic_of_rel(rinfo.args[1].rel_name)
+        rel_sta = get_statistic_of_rel(rinfo.children[1])
         col_name = rinfo.args[1].col_name
         const_val = rinfo.args[0].val
         const_is_null = rinfo.args[0].is_null
@@ -239,27 +248,27 @@ def eqsel(root, operator, rinfo: OpExprRestrict, negate): # negate表示取的�
     return var_eq_const(rel_sta, col_name, const_val, const_is_null, negate)
     
 # op: = of join
-def eqjoinsel(root, operator, rinfo: OpExprRestrict, jointype):
-    if jointype == "INNER" or jointype == "LEFT" or \
-        jointype == "FULL":
+def eqjoinsel(root: PlanNodeInterface, operator: Operator, rinfo: PredicateNode, join_type: JoinType):
+    if join_type == JoinType.INNER or join_type == JoinType.LEFT or \
+        join_type == JoinType.FULL:
         selec = eqjoinsel_inner(operator, rinfo)
-    elif jointype == "SEMI" or jointype == "ANTI":
+    elif join_type == JoinType.SEMI or join_type == JoinType.ANTI:
         # 源码这里会判断是否进行了reversed
         selec = eqjoinsel_semi(operator, rinfo)
     else:
-        elog("ERROR", "unrecognized join type: %s", jointype)
+        elog("ERROR", "unrecognized join type: %s", join_type)
         selec = 0
     selec = clamp_probability(selec)
     return selec
 
 # 没有使用operator变量,这里默认都是=, 不确定会不会出问题
-def eqjoinsel_inner(operator, rinfo):
+def eqjoinsel_inner(operator: Operator, rinfo: PredicateNode):
     # 先处理mcv,再按照普通匹配处理
     flag = True # 判断能否按照先处理mcv,再处理其他数据的进程进行
-    rel_sta0 = get_statistic_of_rel(rinfo.args[0].rel_name)
-    rel_sta1 = get_statistic_of_rel(rinfo.args[1].rel_name)
-    col_sta0 = rel_sta0.column_sta.get(rinfo.args[0].col_name, None)
-    col_sta1 = rel_sta1.column_sta.get(rinfo.args[1].col_name, None)
+    rel_sta0 = get_statistic_of_rel(rinfo.children[0])
+    rel_sta1 = get_statistic_of_rel(rinfo.children[1])
+    col_sta0 = get_statistic_of_col(rel_sta0, rinfo.children[0])
+    col_sta1 = get_statistic_of_col(rel_sta1, rinfo.children[1])
 
     # 是否存在列统计信息
     if col_sta0 == None or col_sta1 == None:
@@ -334,14 +343,14 @@ def eqjoinsel_inner(operator, rinfo):
             nd0, _ = get_variable_num_distinct(rel_sta0, col_sta0)
         else:
             nullfrac0 = 0.0
-            nd0 = DefaultVal.DEFAULT_NUM_DISTINCT.value
+            nd0 = DefaultVal.DEFAULT_NUM_DISTINCT
         
         if col_sta1 != None:
             nullfrac1 = col_sta1.nullfrac
             nd1, _ = get_variable_num_distinct(rel_sta1, col_sta1)
         else:
             nullfrac1 = 0.0
-            nd1 = DefaultVal.DEFAULT_NUM_DISTINCT.value
+            nd1 = DefaultVal.DEFAULT_NUM_DISTINCT
         
         selec = (1.0 - nullfrac0) * (1.0 - nullfrac1)
         if nd0 > nd1:
@@ -354,10 +363,10 @@ def eqjoinsel_inner(operator, rinfo):
 # 没有使用operator变量,这里默认都是=, 不确定会不会出问题
 def eqjoinsel_semi(operator, rinfo):
     flag = True
-    rel_sta0 = get_statistic_kind_of(rinfo.args[0].rel_name)
-    rel_sta1 = get_statistic_kind_of(rinfo.args[1].rel_name)
-    col_sta0 = rel_sta0.column_sta.get(rinfo.args[0].col_name, None)
-    col_sta1 = rel_sta1.column_sta.get(rinfo.args[1].col_name, None)
+    rel_sta0 = get_statistic_of_rel(rinfo.children[0])
+    rel_sta1 = get_statistic_of_rel(rinfo.children[1])
+    col_sta0 = get_statistic_of_col(rel_sta0, rinfo.children[0])
+    col_sta1 = get_statistic_of_col(rel_sta1, rinfo.children[1])
     
     if col_sta0 == None or col_sta1 == None:
         flag = False
@@ -418,14 +427,14 @@ def eqjoinsel_semi(operator, rinfo):
             nd0, isdefault0 = get_variable_num_distinct(rel_sta0, col_sta0)
         else:
             nullfrac0 = 0.0
-            nd0 = DefaultVal.DEFAULT_NUM_DISTINCT.value
+            nd0 = DefaultVal.DEFAULT_NUM_DISTINCT
             isdefault0 = True
         if col_sta1 != None:
             nullfrac1 = col_sta1.nullfrac
             nd1, isdefault1 = get_variable_num_distinct(rel_sta1, col_sta1)
         else:
             nullfrac1 = 0.0
-            nd1 = DefaultVal.DEFAULT_NUM_DISTINCT.value
+            nd1 = DefaultVal.DEFAULT_NUM_DISTINCT
             isdefault1 = True
         
         if isdefault0 == False and isdefault1 == False:
@@ -441,16 +450,16 @@ def eqjoinsel_semi(operator, rinfo):
 
 
 # op: <> of restrict
-def neqsel(root, operator, rinfo: OpExprRestrict):
+def neqsel(root, operator, rinfo: PredicateNode):
     return eqsel(root, operator, rinfo, True)
 
 # op: <> of join
-def neqjoinsel(root, operator, rinfo: OpExprRestrict, jointype):
-    if jointype == "SEMI" or jointype == "ANTI":
+def neqjoinsel(root, operator, rinfo: PredicateNode, join_type):
+    if join_type == JoinType.SEMI or join_type == JoinType.ANTI:
         # 这两种JOIN, 只要右表不是全部一个值,就是相同的, 通常来说这是成立的
         # 所以只需要将外表的null去掉即可
-        rel_sta = get_statistic_kind_of(rinfo.args[0].rel_name)
-        col_sta = rel_sta.column_sta.get(rinfo.args[0].col_name, None)
+        rel_sta = get_statistic_kind_of(rinfo.children[0])
+        col_sta = get_statistic_of_col(rel_sta, rinfo.children[0])
         if col_sta != None:
             nullfrac = col_sta.nullfrac
         else:
@@ -463,7 +472,7 @@ def neqjoinsel(root, operator, rinfo: OpExprRestrict, jointype):
             selec = DefaultSel.DEFAULT_EQ_SEL
         else:
             # 调用eqjoinsel
-            selec = eqjoinsel(root, operator, rinfo, jointype)
+            selec = eqjoinsel(root, operator, rinfo, join_type)
         selec = 1.0 - selec
 
     return selec
@@ -613,31 +622,31 @@ def scalarineqsel(root, operator, isgt, iseq, rel_sta, col_sta, constval):
     return selec
 
 # op: < >= > >= of restrict
-def scalarineqsel_wrapper(root, rinfo: OpExprRestrict, isgt, iseq):
+def scalarineqsel_wrapper(root: PlanNodeInterface, rinfo: PredicateNode, isgt, iseq):
     operator = rinfo.opno
     # 判断一下var在左边还是右边
     if rinfo.args[0].type == "Var":
         onleft = True
-        rel_sta = get_statistic_of_rel(rinfo.args[0].rel_name)
-        col_sta = rel_sta.column_sta.get(rinfo.args[0].col_name, None)
+        rel_sta = get_statistic_of_rel(rinfo.children[0])
+        col_sta = get_statistic_of_col(rel_sta, rinfo.children[0])
         # 只能处理另一端是Const的情况
         # 只能处理有列统计信息的情况
         if rinfo.args[1].type != "Const" or col_sta == None:
-            return DefaultSel.DEFAULT_INEQ_SEL.value
+            return DefaultSel.DEFAULT_INEQ_SEL
         constval = rinfo.args[1].val
     else:
         onleft = False
-        rel_sta = get_statistic_of_rel(rinfo.args[1].rel_name)
-        col_sta = rel_sta.column_sta.get(rinfo.args[1].col_name, None)
+        rel_sta = get_statistic_of_rel(rinfo.children[1])
+        col_sta = get_statistic_of_col(rel_sta, rinfo.children[1])
         if rinfo.args[0].type != "Const" or col_sta == None:
-            return DefaultSel.DEFAULT_INEQ_SEL.value
+            return DefaultSel.DEFAULT_INEQ_SEL
         constval = rinfo.args[0].val
     
     # 切换到var在左边
     if onleft == False:
         operator = get_commutator(operator)
         if operator == Operator.IllegalOperator:
-            return DefaultSel.DEFAULT_INEQ_SEL.value
+            return DefaultSel.DEFAULT_INEQ_SEL
         isgt = not isgt
 
     selec = scalarineqsel(root, operator, isgt, iseq, rel_sta, col_sta, constval)
@@ -658,16 +667,16 @@ def scalargesel(root, rinfo):
 # 难以估计,全取默认值
 # op: < of join
 def scalarltjoinsel(root, rinfo):
-    return DefaultSel.DEFAULT_INEQ_SEL.value
+    return DefaultSel.DEFAULT_INEQ_SEL
 # op: <= of join
 def scalarlejoinsel(root, rinfo):
-    return DefaultSel.DEFAULT_INEQ_SEL.value# op: < of join
+    return DefaultSel.DEFAULT_INEQ_SEL# op: < of join
 # op: > of join
 def scalargtjoinsel(root, rinfo):
-    return DefaultSel.DEFAULT_INEQ_SEL.value# op: < of join
+    return DefaultSel.DEFAULT_INEQ_SEL# op: < of join
 # op: >= of join
 def scalargejoinsel(root, rinfo):
-    return DefaultSel.DEFAULT_INEQ_SEL.value
+    return DefaultSel.DEFAULT_INEQ_SEL
 
 # Pattern　Match
 # TODO:
@@ -689,7 +698,7 @@ def pattern_fixed_prefix(constval):
     pass
 
 # 
-def patternsel(root, rinfo: OpExprRestrict, ptype: PatternType, negate):
+def patternsel(root, rinfo: PredicateNode, ptype: PatternType, negate):
     # 似乎所有的信息都写进了rinfo中, 这里没有像源码一样将operator作为参数传进来
     # !! 后续仔细验证一下是否会出错
     operator = rinfo.opno
@@ -697,12 +706,12 @@ def patternsel(root, rinfo: OpExprRestrict, ptype: PatternType, negate):
         operator = get_negator(operator)
         if operator == Operator.IllegalOperator:
             elog("ERROR", "patternsel called for operator without a negator")
-        result = 1.0 - DefaultSel.DEFAULT_MATCH_SEL.value
+        result = 1.0 - DefaultSel.DEFAULT_MATCH_SEL
     else:
-        restrictParse = DefaultSel.DEFAULT_MATCH_SEL.value
+        restrictParse = DefaultSel.DEFAULT_MATCH_SEL
     
     # must var op const
-    if rinfo.args[0].type != "Var" or rinfo.args[1].type != "Const"):
+    if rinfo.args[0].type != "Var" or rinfo.args[1].type != "Const":
         return result
     
     # TODO: None判断,暂时没在args处理好,后面考虑实现
@@ -717,8 +726,9 @@ def patternsel(root, rinfo: OpExprRestrict, ptype: PatternType, negate):
 
 
     # get nullfrac
-    rel_sta = get_statistic_of_rel(rinfo.args[0].rel_name)
-    col_sta = rel_sta.column_sta.get(rinfo.args[0].col_name, None)
+    rel_sta = get_statistic_of_rel(rinfo.children[0])
+    col_sta = get_statistic_of_col(rel_sta, rinfo.children[0])
+
     nullfrac = (col_sta.nullfrac if col_sta != None else 0.0)
 
     pstatus, prefix, rest_selec = pattern_fixed_prefix(constval)
@@ -766,4 +776,4 @@ def patternsel(root, rinfo: OpExprRestrict, ptype: PatternType, negate):
     return result
 
 def likesel(root, rinfo):
-    return patternsel(root, rinfo, PatternType.PATTERN_TYPE_LIKE, False):
+    return patternsel(root, rinfo, PatternType.PATTERN_TYPE_LIKE, False)
