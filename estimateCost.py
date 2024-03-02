@@ -92,15 +92,15 @@ def cost_rescan(root: PlanNodeInterface):
             startup_cost = root.startup_cost
             total_cost = root.total_cost
     elif node_type == NodeType.CTE_SCAN or node_type == NodeType.WORK_TABLE_SCAN:
-        run_cost = DefaultOSCost.CPU_TUPLE_COST * root.rows
-        nbytes = relation_byte_size(root.rows, root.width)
+        run_cost = DefaultOSCost.CPU_TUPLE_COST * root.est_rows
+        nbytes = relation_byte_size(root.est_rows, root.width)
         if nbytes > DefaultOSSize.WORK_MEM * 1024:
             run_cost += DefaultOSCost.SEQ_PAGE_COST * math.ceil(nbytes / DefaultOSSize.BLCKSZ)
         startup_cost = 0
         total_cost = run_cost
     elif node_type == NodeType.MATERIALIZE or node_type == NodeType.SORT:
-        run_cost = DefaultOSCost.CPU_OPERATOR_COST * root.rows
-        nbytes = relation_byte_size(root.rows, root.width)
+        run_cost = DefaultOSCost.CPU_OPERATOR_COST * root.est_rows
+        nbytes = relation_byte_size(root.est_rows, root.width)
         if nbytes > DefaultOSSize.WORK_MEM * 1024:
             run_cost += DefaultOSCost.SEQ_PAGE_COST * math.ceil(nbytes / DefaultOSSize.BLCKSZ)
         startup_cost = 0

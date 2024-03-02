@@ -12,23 +12,23 @@ def calc_joinrel_size_estimate(root: JoinNodeInterface, left_node: PlanNodeInter
     pselec = root.pselec
     # 根据不同的join类型, rows的计算方法不同 
     if join_type == JoinType.INNER:
-        nrows = left_node.rows * right_node.rows * fkselec * jselec
+        nrows = left_node.est_rows * right_node.est_rows * fkselec * jselec
     elif join_type == JoinType.LEFT:
-        nrows = left_node.rows * right_node.rows * fkselec * jselec
-        if nrows < left_node.rows:
-            nrows = left_node.rows
+        nrows = left_node.est_rows * right_node.est_rows * fkselec * jselec
+        if nrows < left_node.est_rows:
+            nrows = left_node.est_rows
         nrows = nrows * pselec
     elif join_type == JoinType.FULL:
-        nrows = left_node.rows * right_node.rows * fkselec * jselec
-        if nrows < left_node.rows:
-            nrows = left_node.rows
-        if nrows < right_node.rows:
-            nrows = right_node.rows
+        nrows = left_node.est_rows * right_node.est_rows * fkselec * jselec
+        if nrows < left_node.est_rows:
+            nrows = left_node.est_rows
+        if nrows < right_node.est_rows:
+            nrows = right_node.est_rows
         nrows = nrows * pselec
     elif join_type == JoinType.SEMI: #JoinType.semi的选择性定义为: LHS能够匹配上的比例
-        nrows = left_node.rows * fkselec * jselec
+        nrows = left_node.est_rows * fkselec * jselec
     elif join_type == JoinType.ANTI:
-        nrows = left_node.rows * (1.0 - fkselec * jselec)
+        nrows = left_node.est_rows * (1.0 - fkselec * jselec)
         nrows = nrows * pselec
     else:
         elog("ERROR", "unrecognized join type: %s", join_type)
@@ -77,7 +77,7 @@ def get_join_selectivity(root: JoinNodeInterface, left_node: PlanNodeInterface, 
                 ref_rel_tuples = get_tuples_num_of_rel(rinfo.left_rel_array[0])
                 fkselec *= 1.0 / math.max(ref_rel_tuples, 1.0)
         else:
-            jselec *= clause_selectivity(root, rinfo, join_type=root.join_type)
+            jselec *= clause_selectivity(root, rinfo, root.join_type)
 
     # 连接条件计算
     for rinfo in root.filter:
@@ -98,8 +98,8 @@ def approx_tuple_count(root: PlanNodeInterface, clauses: List[PredicateNode]):
     selec = 1.0
     for qual in clauses:
         # pg的实现,还需要传入连接类型和special join info信息
-        selec *= clause_selectivity(root, qual)
-    return clamp_row_est(selec * root.children[0].rows * root.children[1].rows)
+        selec *= clause_selectivity(root, qual, root.join_type if hasattr(root, 'join_type') else None)
+    return clamp_row_est(selec * root.children[0].est_rows * root.children[1].est_rows)
 
 # 似乎是仅通过判断clause涉及的表格来判断的
 # !! 这里不考虑子查询和参数化, 只判断var右边是否是表格
@@ -142,7 +142,7 @@ def restriction_selectivity(root, rinfo: PredicateNode):
 
 
 # 计算给定约束条件下和给定jointype的选择率
-def clause_selectivity(root: PlanNodeInterface, rinfo: PredicateNode, simple_rel_array = None, join_type = None):
+def clause_selectivity(root: PlanNodeInterface, rinfo: PredicateNode, join_type = None, simple_rel_array = None):
     s1 = 0.5
 
     if rinfo == None:
@@ -161,13 +161,13 @@ def clause_selectivity(root: PlanNodeInterface, rinfo: PredicateNode, simple_rel
         # 有点复杂, 这里暂时跳过
         pass
     elif rinfo.type == Restrict.NotClause:
-        s1 = 1.0 - clause_selectivity(root, rinfo.children[0], simple_rel_array, join_type)
+        s1 = 1.0 - clause_selectivity(root, rinfo.children[0], join_type, simple_rel_array)
     elif rinfo.type == Restrict.AndClause:
-        s1 = clauselist_selectivity(root, rinfo.children, simple_rel_array, join_type)
+        s1 = clauselist_selectivity(root, rinfo.children, join_type, simple_rel_array)
     elif rinfo.type == Restrict.OrClause:
         s1 = 0.0
         for ri in rinfo.children:
-            s2 = clause_selectivity(root, ri, simple_rel_array, join_type)
+            s2 = clause_selectivity(root, ri, join_type, simple_rel_array)
             s1 = s1 + s2 - s1 * s2
     elif rinfo.type == Restrict.OpExpr or rinfo.type == Restrict.DistinctExpr:
         if treat_as_join_clause(rinfo):
@@ -200,7 +200,7 @@ def clause_selectivity(root: PlanNodeInterface, rinfo: PredicateNode, simple_rel
     return s1
 
 # TODO:
-def addRangeClause(rqlist, rinfo, varonleft):
+def add_range_clause(rqlist, rinfo, varonleft):
     pass
 
 def clauselist_selectivity(root: PlanNodeInterface, rinfos: List[PredicateNode], simple_rel_array = None, join_type = None):
@@ -224,7 +224,7 @@ def clauselist_selectivity(root: PlanNodeInterface, rinfos: List[PredicateNode],
         if idx == esitmatedclauses[0]:
             esitmatedclauses.pop(0)
             continue
-        s2 = clause_selectivity(root, ri, simple_rel_array, join_type)
+        s2 = clause_selectivity(root, ri, join_type, simple_rel_array)
         # 判断是不是范围查询rinfo
         calnow = True
         if ri.type == "OpExpr" and len(ri.args) == 2:
@@ -241,10 +241,10 @@ def clauselist_selectivity(root: PlanNodeInterface, rinfos: List[PredicateNode],
             
             if ok:
                 if ri.opno == "<" or ri.opno == "<=":
-                    addRangeClause(rqlist, ri, varonleft)
+                    add_range_clause(rqlist, ri, varonleft)
                     calnow = False
                 elif ri.opno == ">" or ri.opno == ">=":
-                    addRangeClause(rqlist, ri, varonleft)
+                    add_range_clause(rqlist, ri, varonleft)
                     calnow = False
 
         if calnow == True:

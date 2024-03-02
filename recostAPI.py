@@ -1,9 +1,11 @@
 from Recost_tmp.PlanNode.planNodeMethod import nodeFactory
-from Recost_tmp.utilsel import StatisticInfoOfRel
+from Recost_tmp.statisticInfo import init_statistic
 # 解析json格式的plan为node
 
 
 
+def RecostInit():
+    init_statistic()
     
 def ParsePostgresPlanJson(json_dict):
     """Takes JSON dict, parses into a Node."""
@@ -35,14 +37,9 @@ def ParsePostgresPlanJson(json_dict):
         if 'Plans' in json_dict:
             for subplan_json in json_dict['Plans']:
                 curr_node.children.append(_parse_pg(subplan_json))
+
         
-        curr_node.initAfterSonInit()
-        # if op == 'Bitmap Heap Scan':
-        #     for c in curr_node.children:
-        #         if c.node_type == 'Bitmap Index Scan':
-        #             # 'Bitmap Index Scan' doesn't have the field 'Relation Name'.
-        #             c.table_name = curr_node.table_name
-        #             c.table_alias = curr_node.table_alias
+        curr_node.init_after_son_init()
 
         return curr_node
 
@@ -51,6 +48,10 @@ def ParsePostgresPlanJson(json_dict):
 # TODO: 存储整颗计划树的节点
 def StorePlanTreeNode(root):
     pass
+
+# 修改_p函数的参数值
+def UpdateParamOfPlanTree(root, dict):
+    root.update_param
 
 def Recost(root):
     
@@ -62,10 +63,6 @@ def Recost(root):
         row_list.extend(sub_row_list)
     root.recost_fun()
     cost_list[0] = root.total_cost
-    row_list[0] = root.rows
+    row_list[0] = root.est_rows
     return cost_list, row_list
-
-
-def InitStatisticInfo():
-    global StatisticInfoOfRel
     

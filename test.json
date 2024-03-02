@@ -1,99 +1,99 @@
-    {
-        "Plan": {
-            "Node Type": "Hash Join",
-            "Parallel Aware": false,
-            "Join Type": "Inner",
-            "Startup Cost": 13.15,
-            "Total Cost": 26.48,
-            "Plan Rows": 140,
-            "Plan Width": 1052,
-            "Actual Startup Time": 0.142,
-            "Actual Total Time": 0.143,
-            "Actual Rows": 0,
-            "Actual Loops": 1,
-            "Output": [
-                "table1.id",
-                "table1.number_column",
-                "table1.string_column",
-                "table1.fk_id",
-                "table2.id",
-                "table2.number_column",
-                "table2.string_column"
-            ],
-            "Inner Unique": false,
-            "Hash Cond": "(table1.number_column = table2.number_column)",
-            "Plans": [
-                {
-                    "Node Type": "Seq Scan",
-                    "Parent Relationship": "Outer",
-                    "Parallel Aware": false,
-                    "Relation Name": "table1",
-                    "Schema": "public",
-                    "Alias": "table1",
-                    "Startup Cost": 0.00,
-                    "Total Cost": 11.40,
-                    "Plan Rows": 140,
-                    "Plan Width": 528,
-                    "Actual Startup Time": 0.052,
-                    "Actual Total Time": 0.053,
-                    "Actual Rows": 4,
-                    "Actual Loops": 1,
-                    "Output": [
-                        "table1.id",
-                        "table1.number_column",
-                        "table1.string_column",
-                        "table1.fk_id"
-                    ]
-                },
-                {
-                    "Node Type": "Hash",
-                    "Parent Relationship": "Inner",
-                    "Parallel Aware": false,
-                    "Startup Cost": 11.40,
-                    "Total Cost": 11.40,
-                    "Plan Rows": 140,
-                    "Plan Width": 524,
-                    "Actual Startup Time": 0.041,
-                    "Actual Total Time": 0.041,
-                    "Actual Rows": 3,
-                    "Actual Loops": 1,
-                    "Output": [
-                        "table2.id",
-                        "table2.number_column",
-                        "table2.string_column"
-                    ],
-                    "Hash Buckets": 1024,
-                    "Original Hash Buckets": 1024,
-                    "Hash Batches": 1,
-                    "Original Hash Batches": 1,
-                    "Peak Memory Usage": 9,
-                    "Plans": [
-                        {
-                            "Node Type": "Seq Scan",
-                            "Parent Relationship": "Outer",
-                            "Parallel Aware": false,
-                            "Relation Name": "table2",
-                            "Schema": "public",
-                            "Alias": "table2",
-                            "Startup Cost": 0.00,
-                            "Total Cost": 11.40,
-                            "Plan Rows": 140,
-                            "Plan Width": 524,
-                            "Actual Startup Time": 0.026,
-                            "Actual Total Time": 0.029,
-                            "Actual Rows": 4,
-                            "Actual Loops": 1,
-                            "Output": [
-                                "table2.id",
-                                "table2.number_column",
-                                "table2.string_column"
-                            ]
-                        }
-                    ]
-                }
-            ]
-        },
-        "Planning Time": 0.803,
-        "Triggers": [],
-        "Execution Time": 0.197
-    }
+{
+    "Plan": {
+        "Node Type": "Hash Join",
+        "Parallel Aware": false,
+        "Join Type": "Inner",
+        "Startup Cost": 13.15,
+        "Total Cost": 26.48,
+        "Plan Rows": 140,
+        "Plan Width": 1052,
+        "Actual Startup Time": 0.255,
+        "Actual Total Time": 0.256,
+        "Actual Rows": 0,
+        "Actual Loops": 1,
+        "Output": [
+            "t1.id",
+            "t1.number_column",
+            "t1.string_column",
+            "t1.fk_id",
+            "t2.id",
+            "t2.number_column",
+            "t2.string_column"
+        ],
+        "Inner Unique": false,
+        "Hash Cond": "(t1.number_column = t2.number_column)",
+        "Plans": [
+            {
+                "Node Type": "Seq Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Relation Name": "table1",
+                "Schema": "public",
+                "Alias": "t1",
+                "Startup Cost": 0.00,
+                "Total Cost": 11.40,
+                "Plan Rows": 140,
+                "Plan Width": 528,
+                "Actual Startup Time": 0.015,
+                "Actual Total Time": 0.017,
+                "Actual Rows": 4,
+                "Actual Loops": 1,
+                "Output": [
+                    "t1.id",
+                    "t1.number_column",
+                    "t1.string_column",
+                    "t1.fk_id"
+                ]
+            },
+            {
+                "Node Type": "Hash",
+                "Parent Relationship": "Inner",
+                "Parallel Aware": false,
+                "Startup Cost": 11.40,
+                "Total Cost": 11.40,
+                "Plan Rows": 140,
+                "Plan Width": 524,
+                "Actual Startup Time": 0.224,
+                "Actual Total Time": 0.225,
+                "Actual Rows": 3,
+                "Actual Loops": 1,
+                "Output": [
+                    "t2.id",
+                    "t2.number_column",
+                    "t2.string_column"
+                ],
+                "Hash Buckets": 1024,
+                "Original Hash Buckets": 1024,
+                "Hash Batches": 1,
+                "Original Hash Batches": 1,
+                "Peak Memory Usage": 9,
+                "Plans": [
+                    {
+                        "Node Type": "Seq Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Relation Name": "table2",
+                        "Schema": "public",
+                        "Alias": "t2",
+                        "Startup Cost": 0.00,
+                        "Total Cost": 11.40,
+                        "Plan Rows": 140,
+                        "Plan Width": 524,
+                        "Actual Startup Time": 0.210,
+                        "Actual Total Time": 0.213,
+                        "Actual Rows": 4,
+                        "Actual Loops": 1,
+                        "Output": [
+                            "t2.id",
+                            "t2.number_column",
+                            "t2.string_column"
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+    "Planning Time": 1.388,
+    "Triggers": [],
+    "Execution Time": 0.321
+}

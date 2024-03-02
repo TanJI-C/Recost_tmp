@@ -6,14 +6,14 @@ from Recost_tmp.PlanNode.planNodeAPI import *
 
 def hashjoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_node: PlanNodeInterface):
     # ! 基数估计部分
-    root.rows = er.calc_joinrel_size_estimate(root, left_node, right_node)
+    root.est_rows = er.calc_joinrel_size_estimate(root, left_node, right_node)
 
     # ! 代价估计部分
     
     # * init cost
     # startup_cost: 左表的startup_cost + 右表的total_cost(构建哈希表需要得到整个右表)
     #               + 右表构建哈希表的时间 + 右表哈希表分批构建的时间
-    num_hashclauses = root.hashclauses.len()
+    num_hashclauses = len(root.hash_cond)
     
     # cost of source data
     startup_cost = left_node.startup_cost       # 
@@ -24,31 +24,30 @@ def hashjoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
     # 哈希处理: 使用DefaultOSCost.CPU_OPERATOR_COST来表示一次哈希需要的代价，然后再乘上num_hashclauses(哈希的次数)
     # 插入哈希表: 使用DefaultOSCost.CPU_TUPLE_COST来表示插入哈希表的代价
     # 右表对于每一列都需要哈希处理并插入哈希表，左表只需要哈希处理，不需要插入哈希表
-    startup_cost += (DefaultOSCost.CPU_OPERATOR_COST * num_hashclauses + DefaultOSCost.CPU_TUPLE_COST) * right_node.rows
-    run_cost += DefaultOSCost.CPU_OPERATOR_COST * num_hashclauses * left_node.rows
+    startup_cost += (DefaultOSCost.CPU_OPERATOR_COST * num_hashclauses + DefaultOSCost.CPU_TUPLE_COST) * right_node.est_rows
+    run_cost += DefaultOSCost.CPU_OPERATOR_COST * num_hashclauses * left_node.est_rows
 
     # 分批处理需要的额外代价
-    space_allowed, numbuckets, numbatches = ExecChooseHashTableSize(right_node.rows, right_node.width)
+    space_allowed, numbuckets, numbatches = ExecChooseHashTableSize(right_node.est_rows, right_node.width)
     root.numbatches = numbatches
     if numbatches > 1:
-        left_pages = page_size(left_node.rows, left_node.width)
-        right_pages = page_size(right_node.rows, right_node.width)
+        left_pages = page_size(left_node.est_rows, left_node.width)
+        right_pages = page_size(right_node.est_rows, right_node.width)
 
         startup_cost += DefaultOSCost.SEQ_PAGE_COST * right_pages
         run_cost += DefaultOSCost.SEQ_PAGE_COST * (right_pages + 2 * left_pages)
     
-    # root.startup_cost = startup_cost
-    # root.total_cost = startup_cost + run_cost
+    # root.est_startup_cost = startup_cost
+    # root.est_total_cost = startup_cost + run_cost
 
     # * final cost
     virtualbuckets = numbuckets * numbatches
-    innerbucketsize = root.innerbucketsize
-    innermcvrfreq = root.innermcvfreq
+    innerbucketsize, innermcvrfreq = estimate_hash_bucket_stats(root, virtualbuckets)
 
     # 如果右表的mcv太大,导致放不下DefaultOSSize.WORK_MEM, 则禁止使用hash
     # 一开始可以使用,但可能在后面发生数据偏移之后就不能使用了
     # ???: 如果是用于模型训练的话需要这样处理吗?
-    if relation_byte_size(clamp_row_est(right_node.row * innermcvrfreq), 
+    if relation_byte_size(clamp_row_est(right_node.est_rows * innermcvrfreq), 
                                right_node.width) > (DefaultOSSize.WORK_MEM * 1024):
         startup_cost += DefaultOSCost.DISABLE_COST
 
@@ -57,33 +56,33 @@ def hashjoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
         root.join_type == JoinType.ANTI or \
         root.inner_unique == True:
         # * 只要匹配一次的话, 进行哈希连接判断的次数会少很多
-        outer_matched_rows = round(left_node.rows * root.semifactors_outer_match_frac)
+        outer_matched_rows = round(left_node.est_rows * root.semifactors_outer_match_frac)
         # 成功匹配到的(桶内)平均位置
         inner_scan_frac = 2.0 / (root.semifactors_match_count + 1.0)
 
         startup_cost += root.hash_qual_cost.startup
         # 成功匹配到的tuple, 进行哈希连接表达式计算的代价
         run_cost += root.hash_qual_cost.per_tuple * outer_matched_rows * \
-            clamp_row_est(right_node.rows * innerbucketsize * inner_scan_frac) * 0.5
+            clamp_row_est(right_node.est_rows * innerbucketsize * inner_scan_frac) * 0.5
         
         # 未能成功匹配到的tuple, 进行哈希连接表达式计算的代价
         # 分为两部分: 
         # 1. 假设所有未匹配到的tuple都与对应bucket内的元组进行了哈希连接的检测
         # 2. 乘 0.05, 修正"没有对应的bucket,不需要进行哈希连接的检测"和"检测到一半就不符合匹配条件"两种情况
         run_cost += root.hash_qual_cost.per_tuple * \
-            (left_node.rows - outer_matched_rows) * \
-            clamp_row_est(right_node.rows / virtualbuckets) * 0.05
+            (left_node.est_rows - outer_matched_rows) * \
+            clamp_row_est(right_node.est_rows / virtualbuckets) * 0.05
         # 计算通过哈希条件判断的元组数
         if root.join_type == JoinType.ANTI:
-            hashjointuples = left_node.rows - outer_matched_rows
+            hashjointuples = left_node.est_rows - outer_matched_rows
         else:
             hashjointuples = outer_matched_rows
     else:
         startup_cost += root.hash_qual_cost.startup
-        run_cost += root.hash_qual_cost.per_tuple * left_node.rows * \
-                    round(right_node.rows * innerbucketsize)
+        run_cost += root.hash_qual_cost.per_tuple * left_node.est_rows * \
+                    round(right_node.est_rows * innerbucketsize)
         # 计算通过哈希条件判断的元组数
-        hashjointuples = clamp_row_est(root.approx_selec * left_node.rows * right_node.rows) 
+        hashjointuples = clamp_row_est(root.approx_selec * left_node.est_rows * right_node.est_rows) 
     
     # 计算哈希连接之外的约束条件的检测代价
     startup_cost += root.qp_qual_cost.startup
@@ -92,17 +91,17 @@ def hashjoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
 
     # 投影最终结果的代价
     startup_cost += root.proj_cost.startup
-    run_cost += root.proj_cost.per_tuple * root.rows
+    run_cost += root.proj_cost.per_tuple * root.est_rows
 
     # 保存当前节点的结果
-    root.startup_cost = startup_cost
-    root.total_cost = startup_cost + run_cost
+    root.est_startup_cost = startup_cost
+    root.est_total_cost = startup_cost + run_cost
 
     
 
 def mergejoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_node: PlanNodeInterface):
     # ! 基数估计
-    root.rows = er.calc_joinrel_size_estimate(root, left_node, right_node)
+    root.est_rows = er.calc_joinrel_size_estimate(root, left_node, right_node)
     
     # ! 代价估计
     # 由于这是一颗已经建立完毕的查询树因此不需要考虑儿子节点无序的问题
@@ -117,10 +116,10 @@ def mergejoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_
     outerendsel = root.outerendsel
     innerstartsel = root.innerendsel
     innerendsel = root.innerendsel
-    outer_skip_rows = round(left_node.rows * outerstartsel)
-    inner_skip_rows = round(right_node.rows * innerstartsel)
-    outer_rows = clamp_row_est(left_node.rows * outerendsel)
-    inner_rows = clamp_row_est(right_node.rows * innerendsel)
+    outer_skip_rows = round(left_node.est_rows * outerstartsel)
+    inner_skip_rows = round(right_node.est_rows * innerstartsel)
+    outer_rows = clamp_row_est(left_node.est_rows * outerendsel)
+    inner_rows = clamp_row_est(right_node.est_rows * innerendsel)
 
     # 原本的实现有进行检测
     assert outer_skip_rows <= outer_rows, "mergejoin: outer_skip_rows too big"
@@ -137,7 +136,7 @@ def mergejoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_
     # * final cost
     
 
-    mergejointuples = clamp_row_est(root.approx_selec * left_node.rows * right_node.rows)
+    mergejointuples = clamp_row_est(root.approx_selec * left_node.est_rows * right_node.est_rows)
 
     # ** mergejoin中如果左表有重复值,指向右表的指针可能需要反复扫描
     # 这里涉及重复扫描的时候,内表是否materialize的问题, 需要进行仔细的判断
@@ -146,16 +145,16 @@ def mergejoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_
     if left_node.node_type == NodeType.UNIQUE or root.skip_mark_restore == True:
         rescannedtuples = 0
     else:
-        rescannedtuples = max(mergejointuples - right_node.rows, 0)
+        rescannedtuples = max(mergejointuples - right_node.est_rows, 0)
     # 内表的每一个tuple平均会被重复扫rescanratio次
-    rescanratio = 1.0 + (rescannedtuples / right_node.rows)
+    rescanratio = 1.0 + (rescannedtuples / right_node.est_rows)
     # 计算重复扫的代价, 为内表的运行代价 * 重复扫描的次数
     bare_inner_cost = (right_node.total_cost - right_node.startup_cost) * rescanratio
 
     # 似乎是使用material处理之后, 重复扫描的代价不是重新运行右表,而是将其material化之后
-    # 使用DefaultOSCost.CPU_OPERATOR_COST * right_node.rows * rescanratio来计算
+    # 使用DefaultOSCost.CPU_OPERATOR_COST * right_node.est_rows * rescanratio来计算
     mat_inner_cost = (right_node.total_cost - right_node.startup_cost) + \
-        DefaultOSCost.CPU_OPERATOR_COST * right_node.rows * rescanratio
+        DefaultOSCost.CPU_OPERATOR_COST * right_node.est_rows * rescanratio
 
     # ** inner table materialize的花费
     # if root.skip_mark_restore == True:
@@ -172,7 +171,7 @@ def mergejoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_
     
     # # 
     # elif (root.innersortkeys != None 
-    #       and relation_byte_size(right_node.rows, right_node.width) > (DefaultOSSize.WORK_MEM * 1024)):
+    #       and relation_byte_size(right_node.est_rows, right_node.width) > (DefaultOSSize.WORK_MEM * 1024)):
     #     root.materialize_inner = True
     # else:
     #     root.materialize_inner = False
@@ -192,8 +191,8 @@ def mergejoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_
     startup_cost += root.merge_qual_cost.per_tuple * \
         (outer_skip_rows + inner_skip_rows * rescanratio)
     run_cost += root.merge_qual_cost.per_tuple * \
-        ((left_node.rows - outer_skip_rows) + \
-         (right_node.rows - inner_skip_rows) * rescanratio)
+        ((left_node.est_rows - outer_skip_rows) + \
+         (right_node.est_rows - inner_skip_rows) * rescanratio)
     
     # 计算连接之外的约束条件的检测代价
     startup_cost += root.qp_qual_cost.startup
@@ -202,16 +201,16 @@ def mergejoin_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_
 
     # 投影最终结果的代价
     startup_cost += root.proj_cost.startup
-    run_cost += root.proj_cost.per_tuple * root.rows
+    run_cost += root.proj_cost.per_tuple * root.est_rows
 
-    root.startup_cost = startup_cost
-    root.total_cost = startup_cost + run_cost
+    root.est_startup_cost = startup_cost
+    root.est_total_cost = startup_cost + run_cost
 
 
 
 def nestloop_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_node: PlanNodeInterface):
     # ! 基数估计
-    root.rows = er.calc_joinrel_size_estimate(root, left_node, right_node)
+    root.est_rows = er.calc_joinrel_size_estimate(root, left_node, right_node)
     
     # ! 代价估计
     # * initial cost:
@@ -221,8 +220,8 @@ def nestloop_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
     # 计算左右表的代价
     startup_cost = left_node.startup_cost + right_node.startup_cost
     run_cost = left_node.total_cost - left_node.startup_cost
-    if left_node.rows > 1:
-        run_cost += (left_node.rows - 1) * inner_rescan_start_cost
+    if left_node.est_rows > 1:
+        run_cost += (left_node.est_rows - 1) * inner_rescan_start_cost
     
     inner_run_cost = right_node.total_cost - right_node.startup_cost
     inner_rescan_run_cost = inner_rescan_total_cost - inner_rescan_start_cost
@@ -235,22 +234,22 @@ def nestloop_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
         pass
     else:
         run_cost += inner_run_cost
-        if left_node.rows > 1:
-            run_cost += (left_node.rows - 1) * inner_rescan_run_cost
+        if left_node.est_rows > 1:
+            run_cost += (left_node.est_rows - 1) * inner_rescan_run_cost
 
     # * final cost
     if root.join_type == JoinType.SEMI or \
         root.join_type == JoinType.ANTI or \
         root.inner_unique == True:
         # 计算左表匹配以及不匹配的数量
-        outer_matched_rows = round(left_node.rows * root.semifactors_outer_match_frac)
-        outer_unmatched_rows = left_node.rows - outer_matched_rows
+        outer_matched_rows = round(left_node.est_rows * root.semifactors_outer_match_frac)
+        outer_unmatched_rows = left_node.est_rows - outer_matched_rows
         # ? 这个变量的含义是什么
         # 成功匹配到的平均位置
         inner_scan_frac = 2.0 / (root.semifactors_match_count + 1.0)
         
         # 需要进行连接条件检测的对数
-        ntuples = outer_matched_rows * right_node.rows * inner_scan_frac
+        ntuples = outer_matched_rows * right_node.est_rows * inner_scan_frac
 
         # 如果有index,那么代价会少很多
         if has_indexed_join_quals(root, right_node) == True:
@@ -258,10 +257,10 @@ def nestloop_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
             if outer_matched_rows > 1:
                 run_cost += (outer_matched_rows - 1) * inner_rescan_run_cost * inner_scan_frac
             #
-            run_cost += outer_unmatched_rows * inner_rescan_run_cost / right_node.rows
+            run_cost += outer_unmatched_rows * inner_rescan_run_cost / right_node.est_rows
         else:
             # 加上未匹配的tuple(会扫描整个右表)而产生的检测次数
-            ntuples += outer_unmatched_rows * right_node.rows
+            ntuples += outer_unmatched_rows * right_node.est_rows
             run_cost += inner_run_cost
             if outer_unmatched_rows >= 1:
                 outer_unmatched_rows -= 1
@@ -275,7 +274,7 @@ def nestloop_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
                 run_cost += outer_unmatched_rows * inner_rescan_run_cost
     else:
         # 需要进行连接条件检测的对数: 整个扫描
-        ntuples = left_node.rows * right_node.rows
+        ntuples = left_node.est_rows * right_node.est_rows
 
     # 连接条件以及其他约束条件的检测代价
     startup_cost += root.qp_qual_cost.startup
@@ -284,21 +283,26 @@ def nestloop_info(root: JoinNodeInterface, left_node: PlanNodeInterface, right_n
 
     # 投影最终结果的代价
     startup_cost += root.proj_cost.startup
-    run_cost += root.proj_cost.per_tuple * root.rows
+    run_cost += root.proj_cost.per_tuple * root.est_rows
 
-    root.startup_cost = startup_cost
-    root.total_cost = startup_cost + run_cost
+    root.est_startup_cost = startup_cost
+    root.est_total_cost = startup_cost + run_cost
 
-def seqscan_info(root: ScanNodeInterface, son: PlanNodeInterface):
-    pass
+def seqscan_info(root: ScanNodeInterface):
+    # TODO:
+    root.est_rows = root.rows
 
 def hash_info(root: ScanNodeInterface, son: PlanNodeInterface):
-    pass
+    # TODO:
+    root.est_rows = root.rows
 
+def materialize_info(root: PlanNodeInterface, son: PlanNodeInterface):
+    # TODO
+    root.est_rows = root.rows
 
 def unique_info(root: PlanNodeInterface, son: PlanNodeInterface):
     # ! 基数估计:
-    root.rows = estimate_num_groups(root, son)
+    root.est_rows = estimate_num_groups(root, son)
 
     # ! 代价估计
     # unique操作的儿子节点一定是一个sort节点
@@ -311,15 +315,15 @@ def unique_info(root: PlanNodeInterface, son: PlanNodeInterface):
     # 获得unique的列数, 源码的实现如下, 将全部的信息放在了sjinfo中
     # numCols = list_length(sjinfo->semi_rhs_exprs)
     numCols = root.num_cols
-    root.startup_cost = son.startup_cost
-    root.total_cost = son.total_cost
+    root.est_startup_cost = son.startup_cost
+    root.est_total_cost = son.total_cost
     # 往高了估计(即判断到最后一列),一次判断的代价为: DefaultOSCost.CPU_OPERATOR_COST * numCols
-    root.total_cost += son.rows * DefaultOSCost.CPU_OPERATOR_COST * numCols
+    root.est_total_cost += son.est_rows * DefaultOSCost.CPU_OPERATOR_COST * numCols
 
 def gathermerge_info(root: PlanNodeInterface, son: PlanNodeInterface):
     # gathermerge的儿子节点有很多个,但都是同一种类型
     # ! 基数估计
-    root.rows = son.rows * root.num_workers
+    root.est_rows = son.est_rows * root.num_workers
 
     # ! 代价估计
     # 儿子节点是并行执行的,所以只需要计算一次startup_cost和total_cost
@@ -333,15 +337,15 @@ def gathermerge_info(root: PlanNodeInterface, son: PlanNodeInterface):
     # 创建堆的花费
     startup_cost += comparison_cost * N * logN
     # merge的花费
-    run_cost += root.rows * comparison_cost * logN
+    run_cost += root.est_rows * comparison_cost * logN
     # 堆管理的成本
-    run_cost += DefaultOSCost.CPU_OPERATOR_COST * root.rows
+    run_cost += DefaultOSCost.CPU_OPERATOR_COST * root.est_rows
 
     # 并行的额外成本
     # 由于gather_merge的有序性, 要求每一个worker都有tuple时才能进行merge
     # 所以将运行的成本调高了5%
     startup_cost += DefaultOSCost.PARALLEL_SETUP_COST
-    run_cost += DefaultOSCost.PARALLEL_TUPLE_COST * root.rows * 1.05
+    run_cost += DefaultOSCost.PARALLEL_TUPLE_COST * root.est_rows * 1.05
 
-    root.startup_cost = startup_cost
-    root.total_cost = startup_cost + run_cost
+    root.est_startup_cost = startup_cost
+    root.est_total_cost = startup_cost + run_cost

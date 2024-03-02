@@ -1,6 +1,7 @@
 # Operator
 from enum import Enum
 from Recost_tmp.PlanNode.planNodeAPI import *
+from Recost_tmp.statisticInfo import *
 from Recost_tmp.PlanNode.filterNode import PredicateNode, Operator, Restrict
 from Recost_tmp.util import * 
 import math
@@ -13,8 +14,6 @@ import math
 # 
 
 # TODO: 对于不同的操作符族,暂时没有考虑不同数据类型对运算符计算原理和选择性计算的影响
-
-StatisticInfoOfRel = {}
 
 
 class DefaultSel:
@@ -36,22 +35,7 @@ def dependencies_clauselist_selectivity(root, rinfo, simple_rel_array, join_type
     pass
 
 
-def get_statistic_of_rel(relation: PredicateNode):
-    # 检查是不是
-    if len(relation.children) == 0 and relation.is_table_exist == True:
-        # TODO: 约定text第一个维度为表格全称, 第二个维度为属性全称
-        return StatisticInfoOfRel.get(relation.text[0], StatisticInfo())
-    # 返回一个空的统计信息
-    return StatisticInfo()
-
-def get_statistic_of_col(rel_sta: StatisticInfo, column: PredicateNode):
-    if len(column.children) == 0 and column.is_table_exist == True:
-        # TODO: 约定text第一个维度为表格全称, 第二个维度为属性全称
-        return rel_sta.column_sta.get(column.text[1], None)
-    # 返回None
-    return None
-
-def get_statistic_kind_of(col_sta: 'ColumnStatisticInfo', kind):
+def get_statistic_kind_of(col_sta: ColumnStatisticInfo, kind):
     staidx = -1
     for idx, val in enumerate(col_sta.stakind):
         if val == kind:
@@ -64,7 +48,7 @@ def get_statistic_kind_of(col_sta: 'ColumnStatisticInfo', kind):
 # 根据列的统计信息返回预估的不同tuple的数量
 # !! 参照源码的简单实现
 # 返回值为ndistinct, isdefault
-def get_variable_num_distinct(rel_sta: 'StatisticInfo',col_sta: 'ColumnStatisticInfo'):
+def get_variable_num_distinct(rel_sta: StatisticInfo,col_sta: ColumnStatisticInfo):
     stadistinct = -1.0
     if rel_sta == None or col_sta == None:
         # !! 这里按照自己的理解设计的,没有列统计信息的话直接返回默认值
@@ -80,7 +64,7 @@ def get_variable_num_distinct(rel_sta: 'StatisticInfo',col_sta: 'ColumnStatistic
     # 负值为比例
     return clamp_row_est(rel_sta.tuples * -stadistinct), False
 
-def judge_unique(col_sta: 'ColumnStatisticInfo'):
+def judge_unique(col_sta: ColumnStatisticInfo):
     dist = col_sta.distinct - col_sta.nullfrac - ColumnStatisticInfo.UNIQUE_DISTINCT
     # 误差范围内则认为是unique
     if dist < 0.01 and dist > -0.01:
@@ -90,13 +74,12 @@ def judge_unique(col_sta: 'ColumnStatisticInfo'):
 # 根据给定的统计信息判断等于给定值的选择率
 # !! const_val 要统一设置为字符串类型吗
 # !! 需要判断onleft的情况吗?
-def var_eq_const(rel_sta: StatisticInfo, column_name ,constval, constisnull, negate):
+def var_eq_const(rel_sta: StatisticInfo, col_sta: ColumnStatisticInfo, constval, constisnull, negate):
     # 等于操作符是严格的,不可以接受NULL参数,如果为NULL,直接返回0.0
     if constisnull == True:
         return 0.0
 
     # 得到column statistic
-    col_sta = rel_sta.column_sta.get(column_name, None)
     if col_sta == None:
         nullfrac = 0.0
         selec = DefaultSel.DEFAULT_EQ_SEL
@@ -147,8 +130,7 @@ def var_eq_const(rel_sta: StatisticInfo, column_name ,constval, constisnull, neg
 
 # var = something-other-than-const case: 通常来说other都是var,不过我们不会用到other的统计信息
 # 而只是通过左侧表格的统计信息简单的进行估计
-def var_eq_non_const(rel_sta: StatisticInfo, column_name, negate):
-    col_sta = rel_sta.column_sta.get(column_name, None)
+def var_eq_non_const(rel_sta: StatisticInfo, col_sta: ColumnStatisticInfo, negate):
     if col_sta == None:
         nullfrac = 0.0
         selec = DefaultSel.DEFAULT_EQ_SEL
@@ -184,7 +166,8 @@ def boolvarsel(root, rinfo: PredicateNode, simple_rel_array):
     rel_sta = get_statistic_of_rel(rinfo)
     if rel_sta != None:
         # !! 如果const_val统一为str类型,那么应该输入"True”
-        selec = var_eq_const(rel_sta, rinfo.column_name, True, False, False)
+        col_sta = get_statistic_of_col(rel_sta, rinfo)
+        selec = var_eq_const(rel_sta, col_sta, True, False, False)
     elif rinfo.type == "FuncExpr":
         selec = 0.3333333
     else:
@@ -223,29 +206,29 @@ def eqsel(root, operator, rinfo: PredicateNode, negate): # negate表示取的结
         # 两边没有一个是const
         if rinfo.children[0].type == Restrict.Var:
             rel_sta = get_statistic_of_rel(rinfo.children[0])
-            col_name = rinfo.args[0].col_name
+            col_sta = get_statistic_of_col(rel_sta, rinfo.children[0])
         else:
             rel_sta = get_statistic_of_rel(rinfo.children[1])
-            col_name = rinfo.args[1].col_name
+            col_sta = get_statistic_of_col(rel_sta, rinfo.children[1])
         if rel_sta == None:
             return (1.0 - DefaultSel.DEFAULT_EQ_SEL.val) if negate == True else DefaultSel.DEFAULT_EQ_SEL.val
-        return var_eq_non_const(rel_sta, col_name, negate)
+        return var_eq_non_const(rel_sta, col_sta, negate)
     
 
     if rinfo.children[0].type == Restrict.Var:
         rel_sta = get_statistic_of_rel(rinfo.children[0])
-        col_name = rinfo.args[0].col_name
-        const_val = rinfo.args[1].val
-        const_is_null = rinfo.args[1].is_null
+        col_sta = get_statistic_of_col(rel_sta, rinfo.children[0])
+        const_val = rinfo.children[1].text
+        const_is_null = rinfo.children[1].text_is_null
     else:
         rel_sta = get_statistic_of_rel(rinfo.children[1])
-        col_name = rinfo.args[1].col_name
-        const_val = rinfo.args[0].val
-        const_is_null = rinfo.args[0].is_null
+        col_sta = get_statistic_of_col(rel_sta, rinfo.children[1])
+        const_val = rinfo.children[0].text
+        const_is_null = rinfo.children[0].text_is_null
     # 如果没有统计信息,返回默认值
     if rel_sta == None:
         return (1.0 - DefaultSel.DEFAULT_EQ_SEL.val) if negate == True else DefaultSel.DEFAULT_EQ_SEL.val
-    return var_eq_const(rel_sta, col_name, const_val, const_is_null, negate)
+    return var_eq_const(rel_sta, col_sta, const_val, const_is_null, negate)
     
 # op: = of join
 def eqjoinsel(root: PlanNodeInterface, operator: Operator, rinfo: PredicateNode, join_type: JoinType):
@@ -625,22 +608,22 @@ def scalarineqsel(root, operator, isgt, iseq, rel_sta, col_sta, constval):
 def scalarineqsel_wrapper(root: PlanNodeInterface, rinfo: PredicateNode, isgt, iseq):
     operator = rinfo.opno
     # 判断一下var在左边还是右边
-    if rinfo.args[0].type == "Var":
+    if rinfo.children[0].type == Restrict.Var:
         onleft = True
         rel_sta = get_statistic_of_rel(rinfo.children[0])
         col_sta = get_statistic_of_col(rel_sta, rinfo.children[0])
         # 只能处理另一端是Const的情况
         # 只能处理有列统计信息的情况
-        if rinfo.args[1].type != "Const" or col_sta == None:
+        if rinfo.children[1].type != Restrict.Const or col_sta == None:
             return DefaultSel.DEFAULT_INEQ_SEL
-        constval = rinfo.args[1].val
+        constval = rinfo.children[1].text
     else:
         onleft = False
         rel_sta = get_statistic_of_rel(rinfo.children[1])
         col_sta = get_statistic_of_col(rel_sta, rinfo.children[1])
-        if rinfo.args[0].type != "Const" or col_sta == None:
+        if rinfo.children[0].type != Restrict.Const or col_sta == None:
             return DefaultSel.DEFAULT_INEQ_SEL
-        constval = rinfo.args[0].val
+        constval = rinfo.children[0].text
     
     # 切换到var在左边
     if onleft == False:
@@ -711,7 +694,7 @@ def patternsel(root, rinfo: PredicateNode, ptype: PatternType, negate):
         restrictParse = DefaultSel.DEFAULT_MATCH_SEL
     
     # must var op const
-    if rinfo.args[0].type != "Var" or rinfo.args[1].type != "Const":
+    if rinfo.children[0].type != "Var" or rinfo.children[1].type != Restrict.Const:
         return result
     
     # TODO: None判断,暂时没在args处理好,后面考虑实现
@@ -741,7 +724,8 @@ def patternsel(root, rinfo: PredicateNode, ptype: PatternType, negate):
     if pstatus == PatternPrefixStatus.PATTERN_PREFIX_EXACT:
         # 源码这里获取了比较的操作符族
         # 这里暂时跳过(考虑不实现)
-        result = var_eq_const(rel_sta, rinfo.args[0].col_name, prefix, False, False)
+        col_sta = get_statistic_of_col(rel_sta, rinfo.children[0])
+        result = var_eq_const(rel_sta, col_sta, prefix, False, False)
     else:
         selec, hist_size = histogram_selectivity(rel_sta, col_sta, operator, prefix)
 

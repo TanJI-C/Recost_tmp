@@ -2,6 +2,7 @@ from enum import Enum
 import math
 import re
 from typing import TypeVar
+from Recost_tmp.util import CustomList
 
 estimated_regex = re.compile(
     '\(cost=(?P<est_startup_cost>\d+.\d+)..(?P<est_cost>\d+.\d+) rows=(?P<est_card>\d+) width=(?P<est_width>\d+)\)')
@@ -103,26 +104,27 @@ class PredicateNode:
         self.children_offset = children_offset
         self.operator = None
         # change: is_p exist
-        self.is_p_exist = False
+        self.p_arg_array = CustomList()
         # change: to cost and row estimate
         self.type = None
         self.cost = Cost()
         self.selec = None
         self.is_join = False
-        self.is_table_exist = False
+        self.table_array = CustomList()
         self.coerce_num = 0
-
+        self.text_is_null = False
 
     def to_dict(self):
         return dict(
-            type = self.type,
-            operator=str(self.operator),
+            type = self.type.value,
+            operator= self.operator.value if self.operator != None else None,
             text = self.text,
+
             cost = [self.cost.startup, self.cost.per_tuple],
             selec = self.selec,
             is_join = self.is_join,
-            is_p_exist = self.is_p_exist,
-            is_table_exist = self.is_table_exist,
+            p_arg_array = self.p_arg_array,
+            table_array = self.table_array,
             coerce_num = self.coerce_num,
             children=[c.to_dict() for c in self.children]
         )
@@ -168,6 +170,15 @@ class PredicateNode:
                 self.text = None
         return Restrict.Const
 
+    def replace_alias(self, dict):
+        # TODO: is_join的判断为涉及的列属性为两个以上
+        for children in self.children:
+            children.replace_alias(dict)
+        for idx, _ in enumerate(self.table_array):
+            self.table_array[idx] = dict.get(self.table_array[idx], self.table_array[idx])
+        if (self.type == Restrict.OpExpr or self.type == Restrict.DistinctExpr) and len(self.table_array) == 2:
+            self.is_join = True
+
     # 主要处理放置在text中的类型转化符
     def adjust_tree(self):
         # 无用的括号
@@ -175,11 +186,11 @@ class PredicateNode:
             self.children[0].adjust_tree()
             self.text = self.children[0].text
             self.operator = self.children[0].operator
-            self.is_p_exist = self.children[0].is_p_exist
+            self.p_arg_array.extend(self.children[0].p_arg_array)
             self.type = self.children[0].type
             self.is_join = self.children[0].is_join
-            self.is_table_exist = self.children[0].is_table_exist
             self.coerce_num = self.children[0].coerce_num
+            self.table_array = self.table_array
             
             self.children = self.children[0].children
             return
@@ -246,14 +257,12 @@ class PredicateNode:
                             # (仅可能是类型转换运算符转换常量，或者仅变量，或者仅常量)
                             # if left.GetConst() == Restrict.Var:
                             #     left.type = Restrict.Var
-                            #     left.is_table_exist = True
                             # else:
                             #     left.type = Restrict.Const
                             self.children = [left, self.children[0]]
                     else:
                         # if left.GetConst() == Restrict.Var:
                         #     left.type = Restrict.Var
-                        #     left.is_table_exist = True
                         # else:
                         #     left.type = Restrict.Const
                         self.children.append(left)
@@ -282,7 +291,8 @@ class PredicateNode:
                 if len(self.children) == 0:
                     if self.GetConst() == Restrict.Var:
                         self.type = Restrict.Var
-                        self.is_table_exist = True
+                        # 只有列名的, 表格的名字会在replace_alias函数中补完
+                        self.table_array.append('omit' if len(self.text) == 1 else self.text[0])
                     else:
                         self.type = Restrict.Const
                     return
@@ -294,13 +304,13 @@ class PredicateNode:
                 elif Operator.P_FUN.value in self.text:
                     node_op = Operator.P_FUN
                     type = Restrict.Var
-                    self.is_p_exist = True
+                    # TODO: _p key_word
+                    self.p_arg_array.append('tmp')
                 elif Operator.SUBSTRING_FUN.value in self.text:
                     node_op = Operator.SUBSTRING_FUN
                     type = Restrict.Var
                     # 将列提取出来
                     self.children[0] = self.children[0].children[0]
-                    self.is_table_exist = True
 
             self.operator = node_op
             self.type = type
@@ -308,22 +318,26 @@ class PredicateNode:
         for idx, _ in enumerate(self.children):
             self.children[idx].adjust_tree()
             self.coerce_num += self.children[idx].coerce_num
-            if self.children[idx].is_p_exist == True:
-                self.is_p_exist = True
-            if self.children[idx].is_table_exist == True:
-                self.is_table_exist = True
+            self.p_arg_array.extend(self.children[idx].p_arg_array)
+            self.table_array.extend(self.children[idx].table_array)
             if len(self.children[idx].children) == 0 and (self.operator == Operator.COERCE or self.operator == Operator.P_FUN):
                 self.text = self.children[idx].text
                 self.operator = self.children[idx].operator
                 self.type = self.children[idx].type
                 self.children = []
                 break
-        if self.type == Restrict.OpExpr and self.children[0].is_table_exist == True and self.children[1].is_table_exist == True:
-            self.is_join = True
             
     # TODO: 检查树的正确性
     def check_tree(self):
         return True
+
+    def updateParam(self, dict):
+        for children in self.children:
+            children.updateParm(dict)
+        # 自己当前层有_p, 且没有儿子了(_p函数里要求是单一的常数)
+        if len(self.children) == 0 and self.type == Restrict.Cosnt and len(self.p_arg_array) == 1:
+            self.text = dict.get(self.p_arg_array[0], self.text)
+
 
     # def parse_lines_recursively(self, parse_baseline=False):
     #     self.parse_lines(parse_baseline=parse_baseline)

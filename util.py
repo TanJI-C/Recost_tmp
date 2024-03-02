@@ -4,6 +4,17 @@ from Recost_tmp.PlanNode.planNodeAPI import JoinType, NodeType
 import math
 import re
 
+class CustomList(List):
+    def append(self, item):
+        if item not in self:
+            super().append(item)
+        else:
+            print(f"元素 {item} 已存在于列表中，无法添加。")
+
+    def extend(self, items):
+        unique_items = [item for item in items if item not in self]
+        super().extend(unique_items)
+
 class DefaultVal:
     INT_MAX = 0x7fffffff
     DEFAULT_NUM_DISTINCT = 200
@@ -100,8 +111,8 @@ def has_indexed_join_quals(root, right_node):
     return False
 
 # TODO: 返回估计的bucketsize和mcvfreq
-def estimate_hash_bucket_stats(root, vardata):
-    pass
+def estimate_hash_bucket_stats(root, nbuckets):
+    return 1, 1
 
 
 def ExecChooseHashTableSize(ntuples, tupwidth, useskew = False, try_combined_work_mem = False, parallel_workers = 0):
